@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#071019">
+  <title>WNBA Live Edge — Wizard of Odds</title>
+  <meta name="description" content="Calibrated WNBA in-play probabilities and conservative expected ROI.">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Wizard of Odds WNBA Live">
+      <span class="brand-mark">W</span>
+      <span><strong>Wizard of Odds</strong><small>WNBA LIVE SIMULATION</small></span>
+    </a>
+    <div class="system-status">
+      <span id="live-dot" class="status-dot"></span>
+      <span id="connection-label">Connecting…</span>
+      <span class="divider"></span>
+      <span id="last-update">Awaiting data</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">CALIBRATED IN-PLAY INTELLIGENCE</p>
+        <h1>See the distribution.<br><span>Not just the pick.</span></h1>
+        <p class="hero-copy">
+          Live WNBA player props and game outcomes ranked by conservative expected ROI.
+          Every recommendation must clear calibration, freshness and uncertainty gates.
+        </p>
+      </div>
+      <div class="hero-metrics" aria-label="Model status">
+        <div><span id="published-count">—</span><small>LIVE EDGES</small></div>
+        <div><span id="simulation-count">—</span><small>SIMULATIONS</small></div>
+        <div><span>2.0%</span><small>HARD ROI FLOOR</small></div>
+      </div>
+    </section>
+
+    <section id="game-strip" class="game-strip" aria-label="Live games"></section>
+
+    <section class="control-panel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-status="PUBLISHED">Published</button>
+        <button class="tab" data-status="QUALIFIED">Qualified</button>
+        <button class="tab" data-status="WATCH">Watchlist</button>
+        <button class="tab" data-status="ALL">All</button>
+      </div>
+      <div class="filters">
+        <label>
+          <span>Market</span>
+          <select id="market-filter">
+            <option value="ALL">All markets</option>
+          </select>
+        </label>
+        <label>
+          <span>Minimum grade</span>
+          <select id="grade-filter">
+            <option value="WATCH">Any</option>
+            <option value="C">C+</option>
+            <option value="B">B+</option>
+            <option value="A">A</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <div>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">AUTOMATED RECOMMENDATIONS</p>
+            <h2>Best available opportunities</h2>
+          </div>
+          <p id="result-count" class="result-count"></p>
+        </div>
+        <div id="recommendation-list" class="recommendation-list" aria-live="polite">
+          <div class="loading-card"></div>
+          <div class="loading-card"></div>
+          <div class="loading-card"></div>
+        </div>
+      </div>
+
+      <aside class="method-card">
+        <p class="eyebrow">WHY THIS QUALIFIED</p>
+        <h3 id="detail-title">Select an opportunity</h3>
+        <div id="detail-empty" class="detail-empty">
+          Open a recommendation to inspect its probability, fair price, uncertainty and market comparison.
+        </div>
+        <div id="detail-content" hidden>
+          <div class="distribution-head">
+            <span>Final-stat distribution</span>
+            <strong id="detail-projection"></strong>
+          </div>
+          <div id="distribution" class="distribution"></div>
+          <dl class="detail-list">
+            <div><dt>Model probability</dt><dd id="detail-probability"></dd></div>
+            <div><dt>Fair odds</dt><dd id="detail-fair"></dd></div>
+            <div><dt>Market price</dt><dd id="detail-price"></dd></div>
+            <div><dt>Expected ROI</dt><dd id="detail-roi"></dd></div>
+            <div><dt>Conservative ROI</dt><dd id="detail-conservative"></dd></div>
+            <div><dt>Required ROI</dt><dd id="detail-required"></dd></div>
+            <div><dt>Total uncertainty</dt><dd id="detail-uncertainty"></dd></div>
+            <div><dt>Market age</dt><dd id="detail-age"></dd></div>
+          </dl>
+          <p class="integrity-note">
+            Conservative ROI applies a one-sided uncertainty deduction. A published
+            opportunity can be withdrawn immediately when the line, game state or model gate changes.
+          </p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="principles">
+      <article><span>01</span><h3>Calibrated first</h3><p>ROI cannot override a failed calibration or data-integrity gate.</p></article>
+      <article><span>02</span><h3>Price-specific</h3><p>Every exact line and sportsbook price is evaluated independently.</p></article>
+      <article><span>03</span><h3>Uncertainty-aware</h3><p>Only conservative ROI can trigger automated publication.</p></article>
+      <article><span>04</span><h3>Fully auditable</h3><p>Recommendations retain their original state, price and model metadata.</p></article>
+    </section>
+
+    <footer>
+      <p><strong>Responsible use:</strong> Model outputs are probabilistic estimates, not guarantees. Sportsbook prices and availability may change.</p>
+      <a href="/docs">API documentation</a>
+    </footer>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

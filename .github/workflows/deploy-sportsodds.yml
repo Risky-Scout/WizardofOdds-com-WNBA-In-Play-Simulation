@@ -1,0 +1,68 @@
+name: Deploy sportsodds
+
+on:
+  workflow_run:
+    workflows: ["Build production image"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_uri:
+        description: Exact GHCR image URI
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sportsodds-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.SPORTSODDS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SPORTSODDS_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 0600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Resolve image
+        id: image
+        env:
+          MANUAL_IMAGE: ${{ inputs.image_uri }}
+        run: |
+          if [[ -n "$MANUAL_IMAGE" ]]; then
+            IMAGE="$MANUAL_IMAGE"
+          else
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:$SHA"
+          fi
+          echo "value=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Copy deployment manifest
+        env:
+          HOST: ${{ secrets.SPORTSODDS_HOST }}
+          USER: ${{ secrets.SPORTSODDS_USER }}
+        run: |
+          ssh "$USER@$HOST" 'sudo install -d -m 0750 /opt/wizard-wnba'
+          scp deploy/sportsodds/docker-compose.prod.yml \
+              deploy/sportsodds/deploy.sh \
+              "$USER@$HOST:/tmp/"
+          ssh "$USER@$HOST" \
+            'sudo install -m 0644 /tmp/docker-compose.prod.yml /opt/wizard-wnba/ && sudo install -m 0755 /tmp/deploy.sh /opt/wizard-wnba/'
+      - name: Deploy immutable image
+        env:
+          HOST: ${{ secrets.SPORTSODDS_HOST }}
+          USER: ${{ secrets.SPORTSODDS_USER }}
+          IMAGE_URI: ${{ steps.image.outputs.value }}
+        run: |
+          ssh "$USER@$HOST" "cd /opt/wizard-wnba && IMAGE_URI='$IMAGE_URI' ./deploy.sh"

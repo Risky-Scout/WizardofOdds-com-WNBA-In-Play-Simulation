@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wizardofodds-wnba-inplay"
+version = "0.1.0"
+description = "WizardofOdds.com automated WNBA in-play simulation and bettor decision engine"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.8,<1",
+]
+sportsdataverse = [
+  "sportsdataverse==0.0.70",
+]
+
+[project.scripts]
+wizard-wnba-api = "wizard_wnba.api:run"
+wizard-wnba-worker = "wizard_wnba.worker:run"
+wizard-wnba-backfill = "wizard_wnba.backfill:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wizard_wnba = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 96
+target-version = "py312"

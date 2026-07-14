@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "model_version": "REPLACE_WITH_TRAINED_MODEL",
+    "calibrator_id": "REPLACE_WITH_OOS_CALIBRATORS",
+    "calibration_score": 0.90,
+    "calibration_se": 0.01,
+    "model_se": 0.02,
+    "calibration_parameters": {
+      "player_points": [1.0, -1.0, 0.0],
+      "player_rebounds": [1.0, -1.0, 0.0],
+      "player_assists": [1.0, -1.0, 0.0],
+      "player_threes": [1.0, -1.0, 0.0],
+      "player_points_rebounds_assists": [1.0, -1.0, 0.0],
+      "h2h": [1.0, -1.0, 0.0],
+      "spreads": [1.0, -1.0, 0.0],
+      "totals": [1.0, -1.0, 0.0]
+    }
+  },
+  "trained_through": "YYYY-MM-DD",
+  "validation_report": {
+    "oos_log_loss": 0.65,
+    "oos_brier": 0.22,
+    "calibration_slope": 1.0,
+    "sample_size": 10000,
+    "note": "EXAMPLE ONLY. Not approved for production."
+  },
+  "profiles": [
+    {
+      "canonical_player_id": "bdl-player-535",
+      "expected_remaining_minutes": 10.0,
+      "remaining_minutes_sd": 2.0,
+      "points_per_minute": 0.70,
+      "rebounds_per_minute": 0.32,
+      "assists_per_minute": 0.10,
+      "threes_per_minute": 0.03,
+      "usage_multiplier": 1.0,
+      "pace_multiplier": 1.0,
+      "role_uncertainty": 0.03,
+      "target_total_minutes": 34.0
+    }
+  ]
+}

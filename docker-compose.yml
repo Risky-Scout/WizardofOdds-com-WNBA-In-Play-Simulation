@@ -1,0 +1,32 @@
+services:
+  api:
+    build: .
+    image: wizardofodds/wnba-inplay:local
+    command: wizard-wnba-api
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - wizard_wnba_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    build: .
+    image: wizardofodds/wnba-inplay:local
+    command: wizard-wnba-worker
+    env_file: .env
+    volumes:
+      - wizard_wnba_data:/data
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  wizard_wnba_data:
