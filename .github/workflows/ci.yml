@@ -1,39 +1,110 @@
 name: CI
 
 on:
-  workflow_dispatch:
   push:
     branches: ["main"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: [self-hosted, wizard-wnba]
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-      - run: python -m pip install -e ".[dev]"
-      - run: ruff check src tests
-      - run: python -m pytest
-      - run: python -m compileall -q src
-      - name: Build and smoke-test container
-        if: matrix.python-version == '3.12'
+
+      - name: Verify Docker
+        shell: bash
         run: |
-          docker build -t wizard-wnba:test .
-          docker run -d --name wizard-wnba-api -p 18080:8080 \
-            -e DATA_DIR=/tmp/data wizard-wnba:test
-          for i in {1..20}; do
-            curl -fsS http://127.0.0.1:18080/health && exit 0
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+          docker version
+          docker info >/dev/null
+          docker compose version
+
+      - name: Test Python 3.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/source:ro" \
+            python:3.12-slim \
+            sh -lc '
+              mkdir /app
+              cp -a /source/. /app/
+              cd /app
+              python -m pip install --upgrade pip
+              python -m pip install -e ".[dev]"
+              ruff check src tests
+              python -m pytest -q
+              python -m compileall -q src
+            '
+
+      - name: Test Python 3.13
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/source:ro" \
+            python:3.13-slim \
+            sh -lc '
+              mkdir /app
+              cp -a /source/. /app/
+              cd /app
+              python -m pip install --upgrade pip
+              python -m pip install -e ".[dev]"
+              ruff check src tests
+              python -m pytest -q
+              python -m compileall -q src
+            '
+
+      - name: Build application image
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+          docker build -t "wizard-wnba-ci:${GITHUB_SHA}" .
+
+      - name: Smoke-test application
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          docker rm -f wizard-wnba-ci-smoke 2>/dev/null || true
+
+          docker run -d \
+            --name wizard-wnba-ci-smoke \
+            -p 18080:8080 \
+            -e DATA_DIR=/tmp/data \
+            "wizard-wnba-ci:${GITHUB_SHA}"
+
+          cleanup() {
+            docker logs wizard-wnba-ci-smoke || true
+            docker rm -f wizard-wnba-ci-smoke || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18080/health; then
+              echo
+              echo "CONTAINER SMOKE TEST PASSED"
+              exit 0
+            fi
             sleep 1
           done
-          docker logs wizard-wnba-api
+
+          echo "CONTAINER SMOKE TEST FAILED"
           exit 1

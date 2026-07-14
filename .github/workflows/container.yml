@@ -3,7 +3,6 @@ name: Build production image
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -17,29 +16,86 @@ concurrency:
 jobs:
   image:
     runs-on: [self-hosted, wizard-wnba]
-    outputs:
-      image: ${{ steps.image.outputs.sha }}
+    timeout-minutes: 45
+
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: image
+
+      - name: Verify Docker Buildx
         shell: bash
         run: |
-          IMAGE_ROOT="ghcr.io/${GITHUB_REPOSITORY,,}"
-          echo "sha=${IMAGE_ROOT}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          echo "latest=${IMAGE_ROOT}:latest" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.image.outputs.sha }}
-            ${{ steps.image.outputs.latest }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+          docker version
+          docker info >/dev/null
+          docker buildx version
+
+      - name: Authenticate to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Configure multi-platform builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          if docker buildx inspect wizard-wnba-builder >/dev/null 2>&1; then
+            docker buildx use wizard-wnba-builder
+          else
+            docker buildx create \
+              --name wizard-wnba-builder \
+              --driver docker-container \
+              --use
+          fi
+
+          docker buildx inspect --bootstrap
+
+      - name: Build and push production image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+
+          REPOSITORY_LOWER="$(
+            printf '%s' "$GITHUB_REPOSITORY" |
+              tr '[:upper:]' '[:lower:]'
+          )"
+
+          IMAGE_ROOT="ghcr.io/${REPOSITORY_LOWER}"
+          IMAGE_SHA="${IMAGE_ROOT}:${GITHUB_SHA}"
+          IMAGE_LATEST="${IMAGE_ROOT}:latest"
+
+          echo "Building:"
+          echo "$IMAGE_SHA"
+          echo "$IMAGE_LATEST"
+
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --tag "$IMAGE_SHA" \
+            --tag "$IMAGE_LATEST" \
+            --push \
+            .
+
+          echo "image_sha=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Record immutable image
+        shell: bash
+        run: |
+          {
+            echo "### Production image"
+            echo
+            echo '${{ steps.build.outputs.image_sha }}'
+          } >> "$GITHUB_STEP_SUMMARY"
