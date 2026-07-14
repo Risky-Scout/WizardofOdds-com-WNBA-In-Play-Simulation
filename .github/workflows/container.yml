@@ -16,9 +16,9 @@ concurrency:
 
 jobs:
   image:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wizard-wnba]
     outputs:
-      image: ${{ steps.image.outputs.image }}
+      image: ${{ steps.image.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -28,13 +28,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: image
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          IMAGE_ROOT="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "sha=${IMAGE_ROOT}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest=${IMAGE_ROOT}:latest" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ steps.image.outputs.image }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ steps.image.outputs.sha }}
+            ${{ steps.image.outputs.latest }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
