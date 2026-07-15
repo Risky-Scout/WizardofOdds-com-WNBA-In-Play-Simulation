@@ -26,6 +26,13 @@ from wnba_inplay.simulation import (
 )
 
 from .odds_math import american_to_decimal
+from .optimization import (
+    blend_conditional_probability,
+    confidence_label,
+    consensus_for_market,
+    deterministic_seed,
+    should_escalate_simulations,
+)
 
 
 PLAYER_MARKET_STATS: dict[str, tuple[str, ...]] = {
@@ -809,6 +816,30 @@ def simulate_live_reference(
             "The live game state is not present in the current snapshot."
         )
 
+    state_age_seconds = max(
+        0.0,
+        _number(game.get("state_age_seconds")),
+    )
+    if state_age_seconds > 20.0:
+        raise LiveReferenceError(
+            "The live game state is more than 20 seconds old."
+        )
+
+    source_file_value = str(market.get("source_file") or "").strip()
+    price_age_seconds: float | None = None
+    if source_file_value:
+        source_path = Path(source_file_value)
+        if source_path.exists():
+            price_age_seconds = max(
+                0.0,
+                datetime.now(UTC).timestamp()
+                - source_path.stat().st_mtime,
+            )
+            if price_age_seconds > 30.0:
+                raise LiveReferenceError(
+                    "The selected sportsbook price is more than 30 seconds old."
+                )
+
     source_game_id = canonical_game_id.removeprefix("bdl-")
     rows = _latest_player_rows(data_dir, source_game_id)
     (
@@ -868,53 +899,156 @@ def simulate_live_reference(
         ),
         require_calibration=False,
     )
+    state_fingerprint = fingerprint(state.to_dict())
+    simulation_seed = deterministic_seed(
+        base_seed=seed,
+        state_fingerprint=state_fingerprint,
+    )
     metadata = RunMetadata(
         run_id=run_id,
         commit_sha="integrated-live-reference",
-        model_version="possession-reference-v1",
-        calibration_version="not-yet-oos-calibrated",
+        model_version="possession-reference-v2",
+        calibration_version="market-consensus-anchor-v1-not-oos",
         event_sequence=state.sequence,
         as_of_timestamp_ms=now_ms,
         source_timestamp_ms=min(
             now_ms,
             max(0, state.last_source_timestamp_ms),
         ),
-        input_fingerprint=fingerprint(state.to_dict()),
+        input_fingerprint=state_fingerprint,
     )
-    report = SimulationService().run(
-        SimulationRequest(
-            state=state,
-            rotation_profiles=rotations,
-            player_profiles=players,
-            team_profiles=teams,
-            markets=(spec,),
-            quote_contexts={spec.market_id: quote_context},
-            metadata=metadata,
-            simulations=simulations,
-            seed=seed + state.sequence,
+    service = SimulationService()
+
+    def execute(count: int):
+        return service.run(
+            SimulationRequest(
+                state=state,
+                rotation_profiles=rotations,
+                player_profiles=players,
+                team_profiles=teams,
+                markets=(spec,),
+                quote_contexts={spec.market_id: quote_context},
+                metadata=metadata,
+                simulations=count,
+                seed=simulation_seed,
+            )
         )
-    )
+
+    actual_simulations = simulations
+    report = execute(actual_simulations)
     output = report.markets[0]
 
     if spec.side == "over":
-        p_win = output.p_over
-        p_loss = output.p_under
-        fair_decimal = output.fair_decimal_over
+        raw_p_win = output.p_over
+        raw_p_loss = output.p_under
     else:
-        p_win = output.p_under
-        p_loss = output.p_over
-        fair_decimal = output.fair_decimal_under
+        raw_p_win = output.p_under
+        raw_p_loss = output.p_over
 
     offered_decimal = american_to_decimal(offered_american)
+    raw_expected_roi = (
+        raw_p_win * (offered_decimal - 1)
+        - raw_p_loss
+    )
+    adaptive_escalation = should_escalate_simulations(
+        requested_simulations=actual_simulations,
+        monte_carlo_error=output.monte_carlo_error,
+        expected_roi=raw_expected_roi,
+    )
+
+    if adaptive_escalation:
+        actual_simulations = 100_000
+        report = execute(actual_simulations)
+        output = report.markets[0]
+        if spec.side == "over":
+            raw_p_win = output.p_over
+            raw_p_loss = output.p_under
+        else:
+            raw_p_win = output.p_under
+            raw_p_loss = output.p_over
+        raw_expected_roi = (
+            raw_p_win * (offered_decimal - 1)
+            - raw_p_loss
+        )
+
+    non_push = max(1.0 - output.p_push, 1e-12)
+    raw_conditional_win = raw_p_win / non_push
+    original_line = market.get("line")
+    exact_line = (
+        line is None
+        or (
+            original_line is not None
+            and math.isclose(
+                float(line),
+                float(original_line),
+                abs_tol=1e-9,
+            )
+        )
+    )
+    requested_side = str(
+        side or market.get("side") or ""
+    ).lower()
+    original_side = str(market.get("side") or "").lower()
+    anchor_eligible = exact_line and requested_side == original_side
+
+    elapsed_fraction = _clip(
+        _elapsed_seconds(game) / 2400.0,
+        0.0,
+        1.0,
+    )
+    consensus = consensus_for_market(
+        market_feed,
+        market,
+        elapsed_fraction=elapsed_fraction,
+    )
+
+    consensus_applied = (
+        anchor_eligible
+        and consensus.probability is not None
+        and consensus.book_count >= 2
+    )
+
+    if consensus_applied:
+        conditional_win = blend_conditional_probability(
+            raw_conditional_win,
+            consensus.probability,
+            consensus.weight,
+        )
+        p_win = conditional_win * non_push
+        p_loss = (1.0 - conditional_win) * non_push
+    else:
+        conditional_win = raw_conditional_win
+        p_win = raw_p_win
+        p_loss = raw_p_loss
+
+    fair_decimal = (
+        math.inf
+        if p_win <= 0
+        else non_push / p_win
+    )
     expected_roi = p_win * (offered_decimal - 1) - p_loss
-    total_uncertainty = math.sqrt(
+
+    raw_model_uncertainty = math.sqrt(
         output.monte_carlo_error**2
         + profile_uncertainty**2
     )
+    if consensus_applied and consensus.uncertainty is not None:
+        total_uncertainty = max(
+            0.020,
+            math.sqrt(
+                (1.0 - consensus.weight) ** 2
+                * raw_model_uncertainty**2
+                + consensus.weight**2
+                * consensus.uncertainty**2
+            ),
+        )
+    else:
+        total_uncertainty = raw_model_uncertainty
+
     allowance = 1.645 * total_uncertainty
     conservative_win = max(0.0, p_win - allowance)
     conservative_loss = min(
-        1.0 - output.p_push,
+        non_push,
         p_loss + allowance,
     )
     conservative_roi = (
@@ -943,7 +1077,8 @@ def simulate_live_reference(
         "monte_carlo_error": output.monte_carlo_error,
         "profile_uncertainty": profile_uncertainty,
         "total_uncertainty": total_uncertainty,
-        "simulation_count": simulations,
+        "simulation_count": actual_simulations,
+        "adaptive_simulation_escalation": adaptive_escalation,
         "pmf": {
             str(value): probability
             for value, probability in output.pmf.items()
@@ -951,11 +1086,30 @@ def simulate_live_reference(
         "manifest": report.manifest.to_dict(),
         "engine": "wnba_inplay.InPlaySimulator",
         "engine_status": "LIVE_REFERENCE_ACTIVE",
-        "calibration_status": "NOT_OOS_CALIBRATED",
+        "calibration_status": (
+            "MARKET_ANCHORED_NOT_OOS_CALIBRATED"
+            if consensus_applied
+            else "NOT_OOS_CALIBRATED"
+        ),
         "official_recommendation": False,
+        "raw_model_win_probability": raw_p_win,
+        "raw_model_expected_roi": raw_expected_roi,
+        "market_consensus_probability": consensus.probability,
+        "market_consensus_book_count": consensus.book_count,
+        "market_consensus_dispersion": consensus.dispersion,
+        "market_consensus_weight": (
+            consensus.weight if consensus_applied else 0.0
+        ),
+        "market_consensus_applied": consensus_applied,
+        "price_age_seconds": price_age_seconds,
+        "state_age_seconds": state_age_seconds,
+        "simulation_seed": simulation_seed,
+        "confidence": confidence_label(total_uncertainty),
         "note": (
-            "This result uses the integrated possession-based reference "
-            "simulator with live game state and Bayesian-shrunk live profiles. "
+            "This result uses the integrated possession-based simulator, "
+            "deterministic common random numbers, adaptive Monte Carlo, "
+            "strict freshness gates, and a robust no-vig consensus "
+            "anchor when comparable books are available. "
             "It is not an official published recommendation until WNBA-specific "
             "out-of-sample calibrators are attached."
         ),
