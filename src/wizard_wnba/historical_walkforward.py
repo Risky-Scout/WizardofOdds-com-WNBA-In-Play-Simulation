@@ -237,12 +237,24 @@ class JsonCache:
 
     def save(self, namespace: str, key: str, payload: Any) -> Path:
         path = self.path(namespace, key)
-        temp = path.with_suffix(".tmp")
-        temp.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        # Give every process a unique temporary file. This prevents
+        # resumable or overlapping runs from racing over one .tmp path.
+        temp = path.with_name(
+            f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
         )
-        temp.replace(path)
+
+        try:
+            temp.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temp, path)
+        finally:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
+
         return path
 
 
