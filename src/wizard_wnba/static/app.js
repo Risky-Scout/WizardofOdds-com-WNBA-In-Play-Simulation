@@ -1,216 +1,573 @@
+"use strict";
+
 const state = {
   snapshot: null,
-  status: "PUBLISHED",
-  market: "ALL",
-  grade: "WATCH",
-  selected: null,
+  options: null,
+  liveMarkets: [],
 };
-const gradeRank = { WATCH: 0, C: 1, B: 2, A: 3 };
 
-const pct = value => `${(Number(value) * 100).toFixed(1)}%`;
-const odds = value => {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return n >= 2 ? `+${Math.round((n - 1) * 100)}` : `${Math.round(-100 / (n - 1))}`;
-};
-const seconds = value => `${Number(value).toFixed(1)}s`;
-const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-}[char]));
+const playerProps = new Set([
+  "player_points",
+  "player_rebounds",
+  "player_assists",
+  "player_threes",
+  "player_points_rebounds_assists",
+]);
 
-function setConnection(live, label) {
-  document.getElementById("live-dot").className = `status-dot ${live ? "live" : "down"}`;
-  document.getElementById("connection-label").textContent = label;
+const byId = id => document.getElementById(id);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    character => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    })[character],
+  );
 }
 
-function render(snapshot) {
-  state.snapshot = snapshot;
-  const generated = new Date(snapshot.generated_at);
-  document.getElementById("last-update").textContent =
-    `Updated ${generated.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"})}`;
-  document.getElementById("published-count").textContent =
-    snapshot.metrics?.published_count ?? 0;
-  document.getElementById("simulation-count").textContent =
-    Number(snapshot.metrics?.simulation_count ?? 0).toLocaleString();
-  renderGames(snapshot.games || []);
-  renderMarketOptions(snapshot.recommendations || []);
-  renderRecommendations();
+function percentage(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const normalized = Math.abs(number) <= 1 ? number * 100 : number;
+  return `${normalized.toFixed(1)}%`;
 }
 
-function renderGames(games) {
-  const target = document.getElementById("game-strip");
+function gameClock(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+}
+
+function minutesRemaining(game) {
+  const period = Number(game?.period);
+  const seconds = Number(game?.clock_seconds);
+
+  if (!Number.isFinite(period) || !Number.isFinite(seconds)) {
+    return null;
+  }
+
+  return period > 4
+    ? seconds / 60
+    : (seconds + Math.max(4 - period, 0) * 600) / 60;
+}
+
+function formatRemaining(minutes) {
+  if (!Number.isFinite(minutes)) return "";
+  return gameClock(minutes * 60);
+}
+
+function parseRemaining(value) {
+  const text = String(value || "").trim();
+
+  if (!text) return null;
+
+  if (!text.includes(":")) {
+    const numeric = Number(text);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  const [minutes, seconds] = text.split(":").map(Number);
+
+  if (
+    !Number.isFinite(minutes)
+    || !Number.isFinite(seconds)
+    || seconds < 0
+    || seconds >= 60
+  ) {
+    return null;
+  }
+
+  return minutes + seconds / 60;
+}
+
+async function fetchJson(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function setConnection(status, text) {
+  const element = byId("connection");
+  element.className = `connection ${status}`;
+  element.querySelector("strong").textContent = text;
+}
+
+function renderSystem(snapshot) {
+  const games = snapshot.games || [];
+  const recommendations = snapshot.recommendations || [];
+  const dataStatus = snapshot.data_status || "UNKNOWN";
+  const modelMissing = (snapshot.metrics?.engine_errors || []).some(
+    error => String(error).includes("MODEL_BUNDLE_NOT_READY"),
+  );
+
+  byId("game-count").textContent = games.length;
+  byId("edge-count").textContent = recommendations.length;
+  byId("engine-status").textContent =
+    snapshot.engine_status || "UNKNOWN";
+  byId("data-status").textContent =
+    dataStatus.replaceAll("_", " ");
+
+  if (modelMissing) {
+    byId("engine-message").textContent =
+      "Live collection and the Scenario Lab simulator are active. Official automated selections remain paused until out-of-sample calibrators are attached.";
+  } else if (dataStatus === "LIVE") {
+    byId("engine-message").textContent =
+      "Live game state and modeled opportunities are updating automatically.";
+  } else {
+    byId("engine-message").textContent =
+      "Live collection is active; publication safety gates remain in effect.";
+  }
+
+  const generatedAt = new Date(snapshot.generated_at);
+
+  byId("last-update").textContent =
+    Number.isNaN(generatedAt.getTime())
+      ? "Live data received"
+      : `Updated ${generatedAt.toLocaleTimeString()}`;
+}
+
+function renderGames(snapshot) {
+  const games = snapshot.games || [];
+  const target = byId("games");
+
+  if (!games.length) {
+    target.innerHTML =
+      '<div class="empty">No active WNBA game detected.</div>';
+    return;
+  }
+
   target.innerHTML = games.map(game => `
-    <article class="game-pill">
-      <div>
-        <strong>${esc(game.away_team)} at ${esc(game.home_team)}</strong>
-        <small>Q${esc(game.period)} · ${formatClock(game.clock_seconds)} · Seq ${esc(game.event_sequence)}</small>
+    <article class="game-card">
+      <div class="game-card-header">
+        <span>Q${escapeHtml(game.period)} · ${gameClock(game.clock_seconds)}</span>
+        <strong>LIVE</strong>
       </div>
-      <div class="game-score">${esc(game.away_score)}–${esc(game.home_score)}</div>
+
+      <div class="team-row">
+        <span>${escapeHtml(game.away_team)}</span>
+        <strong>${escapeHtml(game.away_score)}</strong>
+      </div>
+
+      <div class="team-row">
+        <span>${escapeHtml(game.home_team)}</span>
+        <strong>${escapeHtml(game.home_score)}</strong>
+      </div>
     </article>
   `).join("");
 }
 
-function formatClock(total) {
-  const secondsValue = Math.max(0, Math.round(Number(total)));
-  return `${Math.floor(secondsValue / 60)}:${String(secondsValue % 60).padStart(2, "0")}`;
+function recommendationBook(rec) {
+  return (
+    rec.bookmaker_title
+    || rec.bookmaker
+    || rec.book
+    || rec.sportsbook
+    || "—"
+  );
 }
 
-function renderMarketOptions(items) {
-  const select = document.getElementById("market-filter");
-  const current = select.value;
-  const markets = [...new Set(items.map(item => item.market_key))].sort();
-  select.innerHTML = `<option value="ALL">All markets</option>` +
-    markets.map(market => `<option value="${esc(market)}">${labelMarket(market)}</option>`).join("");
-  select.value = markets.includes(current) ? current : "ALL";
+function recommendationMarket(rec) {
+  return rec.market_title || rec.market || rec.market_key || "—";
 }
 
-function labelMarket(key) {
-  const labels = {
-    player_points: "Player points",
-    player_rebounds: "Player rebounds",
-    player_assists: "Player assists",
-    player_threes: "Player threes",
-    player_points_rebounds_assists: "Player PRA",
-    totals: "Game total",
-    spreads: "Point spread",
-    h2h: "Moneyline",
-  };
-  return labels[key] || key.replaceAll("_", " ");
+function recommendationSelection(rec) {
+  return (
+    rec.player_name
+    || rec.entity_name
+    || rec.selection
+    || rec.description
+    || `${rec.side || ""} ${rec.line ?? ""}`.trim()
+    || "Selection"
+  );
 }
 
-function filteredItems() {
-  const items = state.snapshot?.recommendations || [];
-  return items.filter(item => {
-    const statusMatch = state.status === "ALL" || item.status === state.status;
-    const marketMatch = state.market === "ALL" || item.market_key === state.market;
-    const gradeMatch = gradeRank[item.confidence_grade] >= gradeRank[state.grade];
-    return statusMatch && marketMatch && gradeMatch;
+function filteredRecommendations() {
+  const markets = state.liveMarkets || [];
+  const book = byId("book-filter").value;
+  const market = byId("market-filter").value;
+
+  return markets.filter(item => {
+    return (
+      (!book || item.bookmaker_key === book)
+      && (!market || item.market_key === market)
+    );
   });
 }
 
 function renderRecommendations() {
-  const items = filteredItems();
-  const target = document.getElementById("recommendation-list");
-  document.getElementById("result-count").textContent = `${items.length} opportunities`;
+  const target = byId("recommendations");
+  const markets = filteredRecommendations();
 
-  if (!items.length) {
+  if (!markets.length) {
     target.innerHTML = `
-      <div class="empty-state">
-        No opportunities currently clear these filters. The engine will publish automatically
-        when conservative ROI and all integrity gates pass.
-      </div>`;
+      <tr>
+        <td colspan="7" class="empty">
+          No current sportsbook lines were found for the live game.
+        </td>
+      </tr>`;
     return;
   }
 
-  target.innerHTML = items.map(item => `
-    <button class="rec-card ${state.selected === item.recommendation_id ? "selected" : ""}"
-            data-id="${esc(item.recommendation_id)}">
-      <span class="grade">${esc(item.confidence_grade)}</span>
-      <span class="rec-name">
-        <strong>${esc(item.player_name || labelMarket(item.market_key))}</strong>
-        <small>${esc(item.side.toUpperCase())} ${item.line ?? ""} · ${esc(item.bookmaker_title)} ${item.american_odds > 0 ? "+" : ""}${esc(item.american_odds)}</small>
-      </span>
-      <span class="metric">
-        <span class="metric-label">MODEL</span>
-        <span class="metric-value">${pct(item.model_probability)}</span>
-      </span>
-      <span class="metric">
-        <span class="metric-label">CONSERVATIVE ROI</span>
-        <span class="metric-value ${item.conservative_roi > 0 ? "roi-positive" : ""}">${pct(item.conservative_roi)}</span>
-      </span>
-      <span class="metric optional">
-        <span class="metric-label">FAIR / MARKET</span>
-        <span class="metric-value">${odds(item.fair_decimal_odds)} / ${item.american_odds > 0 ? "+" : ""}${esc(item.american_odds)}</span>
-      </span>
-      <span class="status-badge ${esc(item.status)}">${esc(item.status)}</span>
-    </button>
-  `).join("");
-
-  target.querySelectorAll(".rec-card").forEach(card => {
-    card.addEventListener("click", () => selectRecommendation(card.dataset.id));
-  });
-}
-
-function selectRecommendation(id) {
-  state.selected = id;
-  const item = (state.snapshot?.recommendations || []).find(value => value.recommendation_id === id);
-  if (!item) return;
-  document.getElementById("detail-empty").hidden = true;
-  document.getElementById("detail-content").hidden = false;
-  document.getElementById("detail-title").textContent =
-    `${item.player_name || labelMarket(item.market_key)} · ${item.side.toUpperCase()} ${item.line ?? ""}`;
-  document.getElementById("detail-projection").textContent =
-    `${Number(item.projected_mean).toFixed(1)} ± ${Number(item.projected_sd).toFixed(1)}`;
-  document.getElementById("detail-probability").textContent = pct(item.model_probability);
-  document.getElementById("detail-fair").textContent = odds(item.fair_decimal_odds);
-  document.getElementById("detail-price").textContent =
-    `${item.bookmaker_title} ${item.american_odds > 0 ? "+" : ""}${item.american_odds}`;
-  document.getElementById("detail-roi").textContent = pct(item.expected_roi);
-  document.getElementById("detail-conservative").textContent = pct(item.conservative_roi);
-  document.getElementById("detail-required").textContent = pct(item.required_roi);
-  document.getElementById("detail-uncertainty").textContent = pct(item.total_uncertainty);
-  document.getElementById("detail-age").textContent = seconds(item.market_age_seconds);
-  renderDistribution(item);
-  renderRecommendations();
-}
-
-function renderDistribution(item) {
-  const target = document.getElementById("distribution");
-  const mean = Number(item.projected_mean);
-  const sd = Math.max(Number(item.projected_sd), .7);
-  const start = Math.max(0, Math.floor(mean - 3 * sd));
-  const end = Math.ceil(mean + 3 * sd);
-  const values = [];
-  for (let x = start; x <= end; x++) {
-    const density = Math.exp(-.5 * Math.pow((x - mean) / sd, 2));
-    values.push({x, density});
-  }
-  const max = Math.max(...values.map(value => value.density));
-  target.innerHTML = values.map(value => `
-    <span class="bar ${Math.round(Number(item.line)) === value.x ? "line" : ""}"
-          style="height:${Math.max(3, value.density / max * 100)}%"
-          data-label="${value.x}: relative ${Math.round(value.density / max * 100)}%"></span>
+  target.innerHTML = markets.map(item => `
+    <tr>
+      <td>
+        ${escapeHtml(item.selection)}
+        ${item.side ? ` · ${escapeHtml(item.side)}` : ""}
+      </td>
+      <td>${escapeHtml(item.market_title || item.market_key)}</td>
+      <td>${escapeHtml(item.bookmaker_title)}</td>
+      <td>${escapeHtml(item.line ?? "—")}</td>
+      <td>${escapeHtml(item.american_odds)}</td>
+      <td>Pending model</td>
+      <td>Pending model</td>
+    </tr>
   `).join("");
 }
 
-document.querySelectorAll(".tab").forEach(button => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
-    button.classList.add("active");
-    state.status = button.dataset.status;
-    renderRecommendations();
-  });
-});
-document.getElementById("market-filter").addEventListener("change", event => {
-  state.market = event.target.value;
-  renderRecommendations();
-});
-document.getElementById("grade-filter").addEventListener("change", event => {
-  state.grade = event.target.value;
-  renderRecommendations();
-});
+function populateOptions() {
+  if (!state.options) return;
 
-async function fallbackFetch() {
-  try {
-    const response = await fetch("/api/v1/snapshot", {cache: "no-store"});
-    render(await response.json());
-    setConnection(true, "Live API");
-  } catch {
-    setConnection(false, "Reconnecting");
-  }
+  const book = byId("book-filter");
+  const market = byId("market-filter");
+
+  const selectedBook = book.value;
+  const selectedMarket = market.value;
+
+  book.innerHTML =
+    '<option value="">All books</option>'
+    + (state.options.bookmakers || []).map(item => `
+      <option value="${escapeHtml(item.key)}">
+        ${escapeHtml(item.title)}
+      </option>
+    `).join("");
+
+  market.innerHTML =
+    '<option value="">All markets</option>'
+    + (state.options.markets || []).map(item => `
+      <option value="${escapeHtml(item.key)}">
+        ${escapeHtml(item.title)}
+      </option>
+    `).join("");
+
+  book.value = selectedBook;
+  market.value = selectedMarket;
 }
 
-function connect() {
-  const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${protocol}://${location.host}/ws/live`);
-  socket.onopen = () => setConnection(true, "Live stream");
-  socket.onmessage = event => render(JSON.parse(event.data));
-  socket.onclose = () => {
-    setConnection(false, "Reconnecting");
-    setTimeout(connect, 2000);
+function findGameForRecommendation(rec) {
+  const games = state.snapshot?.games || [];
+  const id = rec.canonical_game_id || rec.game_id;
+
+  return games.find(game =>
+    game.canonical_game_id === id || game.game_id === id
+  ) || games[0] || null;
+}
+
+function populateScenarioSelections() {
+  const select = byId("scenario-selection");
+  const submit = byId("scenario-submit");
+  const markets = state.liveMarkets || [];
+  const previous = select.value;
+
+  if (!markets.length) {
+    select.innerHTML =
+      '<option value="">No current live sportsbook lines</option>';
+    select.disabled = true;
+    submit.disabled = true;
+    return;
+  }
+
+  select.innerHTML =
+    '<option value="">Select a live sportsbook line</option>'
+    + markets.map(item => {
+      const line = item.line == null ? "" : ` ${item.line}`;
+      const label = [
+        item.selection,
+        item.market_title || item.market_key,
+        `${item.side}${line}`,
+        item.bookmaker_title,
+        item.american_odds > 0
+          ? `+${item.american_odds}`
+          : item.american_odds,
+      ].filter(Boolean).join(" · ");
+
+      return `
+        <option value="${escapeHtml(item.market_id)}">
+          ${escapeHtml(label)}
+        </option>`;
+    }).join("");
+
+  select.disabled = false;
+
+  if (markets.some(item => item.market_id === previous)) {
+    select.value = previous;
+  }
+
+  submit.disabled = true;
+}
+
+function selectedRecommendation() {
+  const id = byId("scenario-selection").value;
+
+  return (state.liveMarkets || []).find(
+    item => String(item.market_id) === id,
+  );
+}
+
+function prepareScenario() {
+  const item = selectedRecommendation();
+  const submit = byId("scenario-submit");
+  const error = byId("scenario-error");
+
+  error.textContent = "";
+  submit.disabled = !item;
+
+  if (!item) {
+    byId("current-total-field").classList.add("hidden");
+    byId("scenario-result").textContent =
+      "Select a live sportsbook line to run the simulator.";
+    return;
+  }
+
+  const sideValues = new Set(["over", "under", "home", "away"]);
+  byId("scenario-side").value = sideValues.has(item.side)
+    ? item.side
+    : "over";
+
+  byId("scenario-line").value =
+    item.line == null
+      ? item.market_key === "h2h" ? 0.5 : ""
+      : item.line;
+
+  byId("scenario-odds").value = item.american_odds ?? "";
+
+  const prop = playerProps.has(String(item.market_key || ""));
+  byId("current-total-field").classList.toggle("hidden", !prop);
+  byId("scenario-current-total").value = "";
+
+  const game = findGameForRecommendation(item);
+  const remaining = minutesRemaining(game);
+
+  byId("scenario-time").value = formatRemaining(remaining);
+  byId("scenario-time").dataset.baseline =
+    Number.isFinite(remaining) ? String(remaining) : "";
+
+  byId("scenario-result").textContent =
+    "Line loaded. Run the possession-based live simulation.";
+}
+
+function renderScenarioResult(result) {
+  byId("scenario-result").innerHTML = `
+    <div class="result-grid">
+      <div>
+        <small>Win probability</small>
+        <strong>${percentage(result.win_probability)}</strong>
+      </div>
+      <div>
+        <small>Push probability</small>
+        <strong>${percentage(result.push_probability)}</strong>
+      </div>
+      <div>
+        <small>Fair American odds</small>
+        <strong>${
+          result.fair_american_odds > 0
+            ? `+${result.fair_american_odds}`
+            : result.fair_american_odds ?? "—"
+        }</strong>
+      </div>
+      <div>
+        <small>Expected ROI</small>
+        <strong>${percentage(result.expected_roi)}</strong>
+      </div>
+      <div>
+        <small>Conservative ROI</small>
+        <strong>${percentage(result.conservative_roi)}</strong>
+      </div>
+      <div>
+        <small>Simulations</small>
+        <strong>${Number(result.simulation_count).toLocaleString()}</strong>
+      </div>
+      <div>
+        <small>Projected mean</small>
+        <strong>${Number(result.projected_mean).toFixed(2)}</strong>
+      </div>
+      <div>
+        <small>Model confidence</small>
+        <strong>${
+          Number(result.total_uncertainty) <= 0.04
+            ? "High"
+            : Number(result.total_uncertainty) <= 0.08
+              ? "Medium"
+              : "Low"
+        }</strong>
+      </div>
+    </div>
+    <p class="simulation-note">
+      ${escapeHtml(result.note || "")}
+    </p>`;
+}
+
+async function runScenario(event) {
+  event.preventDefault();
+
+  const item = selectedRecommendation();
+  const error = byId("scenario-error");
+  error.textContent = "";
+
+  if (!item) {
+    error.textContent = "Select a live sportsbook line.";
+    return;
+  }
+
+  const line = Number(byId("scenario-line").value);
+  const odds = Number(byId("scenario-odds").value);
+
+  if (!Number.isFinite(line)) {
+    error.textContent = "Enter a valid custom line.";
+    return;
+  }
+
+  if (
+    !Number.isInteger(odds)
+    || odds === 0
+    || (odds > -100 && odds < 100)
+  ) {
+    error.textContent =
+      "Enter American odds such as -110 or +105.";
+    return;
+  }
+
+  const remaining = parseRemaining(byId("scenario-time").value);
+  if (remaining === null) {
+    error.textContent =
+      "Enter time remaining as 8:24 or decimal minutes.";
+    return;
+  }
+
+  const payload = {
+    market_id: item.market_id,
+    side: byId("scenario-side").value,
+    line,
+    american_odds: odds,
+    remaining_minutes: remaining,
+    simulations: 20000,
   };
-  socket.onerror = () => socket.close();
+
+  if (playerProps.has(String(item.market_key || ""))) {
+    const current = byId("scenario-current-total").value.trim();
+    if (current !== "") {
+      const currentTotal = Number(current);
+      if (!Number.isFinite(currentTotal) || currentTotal < 0) {
+        error.textContent =
+          "Enter a valid player's current total.";
+        return;
+      }
+      payload.current_total = currentTotal;
+    }
+  }
+
+  const submit = byId("scenario-submit");
+  submit.disabled = true;
+  submit.textContent = "Running 20,000 simulations…";
+  byId("scenario-result").textContent =
+    "Running the live possession simulation…";
+
+  try {
+    const result = await fetchJson(
+      "/api/v1/live-reference-simulation",
+      {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify(payload),
+      },
+    );
+    renderScenarioResult(result);
+  } catch (requestError) {
+    error.textContent = `Simulation failed: ${requestError.message}`;
+    byId("scenario-result").textContent =
+      "The simulation could not be completed.";
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Run custom scenario";
+  }
 }
 
-fallbackFetch();
-connect();
+function render(snapshot) {
+  state.snapshot = snapshot;
+  renderSystem(snapshot);
+  renderGames(snapshot);
+  renderRecommendations();
+  populateScenarioSelections();
+}
+
+async function refresh() {
+  try {
+    if (!state.options) {
+      state.options = await fetchJson(
+        `/api/v1/product-options?refresh=${Date.now()}`,
+      );
+
+      populateOptions();
+    }
+
+    const [snapshot, marketFeed] = await Promise.all([
+      fetchJson(`/api/v1/snapshot?refresh=${Date.now()}`),
+      fetchJson(`/api/v1/live-markets?refresh=${Date.now()}`),
+    ]);
+
+    state.liveMarkets = marketFeed.markets || [];
+
+    render(snapshot);
+    setConnection("live", "Live");
+  } catch (error) {
+    console.error(error);
+    setConnection("error", "Reconnecting");
+    byId("engine-message").textContent =
+      `Live update failed: ${error.message}. Retrying automatically.`;
+  }
+}
+
+function bindControls() {
+  byId("book-filter").addEventListener(
+    "change",
+    renderRecommendations,
+  );
+
+  byId("market-filter").addEventListener(
+    "change",
+    renderRecommendations,
+  );
+
+  byId("scenario-selection").addEventListener(
+    "change",
+    prepareScenario,
+  );
+
+  byId("scenario-form").addEventListener(
+    "submit",
+    runScenario,
+  );
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  bindControls();
+  refresh();
+  window.setInterval(refresh, 5000);
+});
