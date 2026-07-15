@@ -424,6 +424,60 @@ function renderScenarioResult(result) {
     </p>`;
 }
 
+
+async function fetchSimulation(url, options = {}) {
+  const controller = new AbortController();
+
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    300000,
+  );
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let payload = {};
+
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = {detail: text};
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        payload.detail
+        || payload.message
+        || `Simulation failed: HTTP ${response.status}`,
+      );
+    }
+
+    return payload;
+  } catch (error) {
+    if (
+      error?.name === "AbortError"
+      || String(error?.message || error)
+        .toLowerCase()
+        .includes("aborted")
+    ) {
+      throw new Error(
+        "The simulation exceeded five minutes.",
+      );
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function runScenario(event) {
   event.preventDefault();
 
@@ -490,7 +544,7 @@ async function runScenario(event) {
     "Running the live possession simulation…";
 
   try {
-    const result = await fetchJson(
+    const result = await fetchSimulation(
       "/api/v1/live-reference-simulation",
       {
         method: "POST",

@@ -398,3 +398,40 @@ form button,
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Scenario Lab stable non-overlapping layout */
+.scenario-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 20px !important;
+  align-items: start !important;
+  overflow: visible !important;
+}
+
+.scenario-grid form,
+.scenario-result {
+  position: relative !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.scenario-grid form {
+  z-index: 2 !important;
+  overflow: visible !important;
+}
+
+.scenario-result {
+  z-index: 1 !important;
+  min-height: 220px !important;
+}
+
+.scenario-grid label,
+.scenario-grid select,
+.scenario-grid input,
+.scenario-grid button {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}

@@ -33,6 +33,7 @@ from .live_reference import (
     simulate_live_reference,
 )
 from .settings import get_settings
+from starlette.concurrency import run_in_threadpool
 
 
 settings = get_settings()
@@ -217,7 +218,7 @@ async def live_reference_simulation(
         list(snapshot_value.get("games", [])),
     )
     try:
-        return simulate_live_reference(
+        return await run_in_threadpool(lambda: simulate_live_reference(
             data_dir=settings.data_dir,
             snapshot=snapshot_value,
             market_feed=market_feed,
@@ -229,7 +230,7 @@ async def live_reference_simulation(
             remaining_minutes=request.remaining_minutes,
             simulations=request.simulations,
             seed=settings.random_seed,
-        )
+        ))
     except LiveReferenceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
