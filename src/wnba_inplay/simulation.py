@@ -5,10 +5,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 import math
 import random
-from statistics import fmean
 from typing import Callable, Mapping, Sequence
 
-from .domain import GameState, PlayerState, PlayerStats
+from .domain import GameState, PlayerStats
 from .rotation import (
     PlayerRotationProfile,
     RotationAllocator,

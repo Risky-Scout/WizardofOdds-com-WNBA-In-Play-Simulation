@@ -83,3 +83,12 @@ prospective archive provides the most defensible evaluation of:
 - withdrawals;
 - execution-window assumptions;
 - schema changes.
+
+
+## Bovada
+
+Production Bovada coverage uses The Odds API bookmaker key `bovada`, requested
+in American odds format. Direct collection from Bovada website endpoints is not
+part of the production path. Any future direct adapter must run in shadow mode
+until terms, schema stability, polling limits, duplicate reconciliation, and
+failover behavior are approved.

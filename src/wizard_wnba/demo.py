@@ -77,15 +77,19 @@ def build_demo_snapshot(simulations: int = 4000, seed: int = 42):
         ("draftkings", "DraftKings", "player_points", "lv-1", "A'ja Wilson", 26.5, -105, -115),
         ("fanduel", "FanDuel", "player_points", "lv-1", "A'ja Wilson", 26.5, 105, -135),
         ("caesars", "Caesars", "player_points", "lv-1", "A'ja Wilson", 26.5, 100, -130),
+        ("bovada", "Bovada", "player_points", "lv-1", "A'ja Wilson", 26.5, 110, -140),
         ("draftkings", "DraftKings", "player_rebounds", "ny-1", "Breanna Stewart", 10.5, 110, -140),
         ("fanduel", "FanDuel", "player_rebounds", "ny-1", "Breanna Stewart", 10.5, 115, -145),
         ("caesars", "Caesars", "player_rebounds", "ny-1", "Breanna Stewart", 10.5, 105, -135),
+        ("bovada", "Bovada", "player_rebounds", "ny-1", "Breanna Stewart", 10.5, 120, -150),
         ("draftkings", "DraftKings", "player_assists", "ny-2", "Sabrina Ionescu", 7.5, 100, -130),
         ("fanduel", "FanDuel", "player_assists", "ny-2", "Sabrina Ionescu", 7.5, 105, -135),
         ("caesars", "Caesars", "player_assists", "ny-2", "Sabrina Ionescu", 7.5, -105, -125),
+        ("bovada", "Bovada", "player_assists", "ny-2", "Sabrina Ionescu", 7.5, 110, -140),
         ("draftkings", "DraftKings", "totals", None, None, 157.5, -108, -112),
         ("fanduel", "FanDuel", "totals", None, None, 157.5, -105, -115),
         ("caesars", "Caesars", "totals", None, None, 157.5, -110, -110),
+        ("bovada", "Bovada", "totals", None, None, 157.5, -105, -115),
     ]
     offers: list[MarketOffer] = []
     for index, (

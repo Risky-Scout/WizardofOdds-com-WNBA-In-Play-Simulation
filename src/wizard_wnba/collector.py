@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import logging
+import re
 from typing import Any, Mapping
 
 from .adapters.balldontlie import BallDontLieClient
@@ -13,6 +14,41 @@ from .storage import RawSnapshotStore
 
 
 logger = logging.getLogger(__name__)
+
+
+_LIVE_STATUS_PATTERN = re.compile(
+    r"\b(?:q[1-4]|[1-4](?:st|nd|rd|th)\s+(?:qtr|quarter)|"
+    r"halftime|half-time|overtime|ot|in progress|live)\b",
+    re.IGNORECASE,
+)
+
+
+def is_bdl_game_live(row: Mapping[str, Any]) -> bool:
+    status = str(row.get("status", "")).strip().lower()
+    period = int(row.get("period", 0) or 0)
+
+    if (
+        status in {"final", "post"}
+        or status.startswith("final")
+        or status.startswith("postponed")
+        or status.startswith("cancelled")
+        or status.startswith("canceled")
+    ):
+        return False
+
+    if period > 0:
+        return True
+
+    return bool(_LIVE_STATUS_PATTERN.search(status))
+
+
+def discovery_dates(captured: datetime) -> tuple[date, ...]:
+    # Include the prior UTC date so late-evening U.S. games are not
+    # dropped when the container passes midnight UTC.
+    return (
+        captured.date(),
+        (captured - timedelta(days=1)).date(),
+    )
 
 
 @dataclass(frozen=True)
@@ -74,7 +110,7 @@ class LiveCollector:
         quota_remaining = None
 
         try:
-            response = await self.bdl.games(dates=(date.today(),))
+            response = await self.bdl.games(dates=discovery_dates(captured))
             bdl_games_payload = response.payload
             self._archive(response, captured)
         except Exception as exc:
@@ -91,8 +127,7 @@ class LiveCollector:
         live_rows = [
             row
             for row in bdl_games_payload.get("data", [])
-            if str(row.get("status", "")).lower() not in {"post", "final"}
-            and int(row.get("period", 0) or 0) > 0
+            if is_bdl_game_live(row)
         ]
         for row in live_rows:
             game_id = int(row["id"])

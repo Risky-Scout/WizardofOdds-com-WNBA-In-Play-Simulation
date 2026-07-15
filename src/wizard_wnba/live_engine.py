@@ -22,6 +22,62 @@ from .settings import Settings
 logger = logging.getLogger(__name__)
 
 
+def summarize_live_games(
+    cycle: CollectionCycle,
+) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
+    summaries: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    rows = {
+        int(row["id"]): row
+        for row in cycle.bdl_games_payload.get("data", [])
+    }
+
+    for game_id, live_payload in cycle.live_game_payloads.items():
+        row = rows.get(game_id)
+
+        if row is None:
+            errors.append(f"GAME_ROW_MISSING:{game_id}")
+            continue
+
+        plays = list(live_payload.plays.get("data", []))
+
+        latest_play = max(
+            plays,
+            key=lambda item: int(item.get("order", 0) or 0),
+            default=None,
+        )
+
+        try:
+            game = normalize_bdl_game(
+                row,
+                received_at=cycle.captured_at,
+                latest_play=latest_play,
+            )
+        except Exception as exc:
+            errors.append(
+                f"GAME_NORMALIZATION_FAILED:{game_id}:{exc}"
+            )
+            continue
+
+        summaries.append(
+            {
+                "canonical_game_id": game.canonical_game_id,
+                "away_team": game.away_team,
+                "home_team": game.home_team,
+                "away_score": game.away_score,
+                "home_score": game.home_score,
+                "period": game.period,
+                "clock_seconds": game.clock_seconds,
+                "event_sequence": game.event_sequence,
+                "state_age_seconds": game.age_seconds,
+                "status": game.status,
+            }
+        )
+
+    return tuple(summaries), tuple(errors)
+
+
 def match_odds_event(
     bdl_game: Mapping[str, Any],
     odds_events: tuple[Mapping[str, Any], ...],
@@ -68,13 +124,20 @@ class LiveRecommendationEngine:
         cycle: CollectionCycle,
     ) -> tuple[tuple[Recommendation, ...], tuple[dict[str, Any], ...], tuple[str, ...]]:
         errors: list[str] = []
+        game_summaries, summary_errors = summarize_live_games(cycle)
+        errors.extend(summary_errors)
+
         try:
             bundle = ModelBundle.load(self.model_bundle_path)
         except ModelBundleError as exc:
-            return (), (), (f"MODEL_BUNDLE_NOT_READY: {exc}",)
+            return (
+                (),
+                game_summaries,
+                tuple(errors)
+                + (f"MODEL_BUNDLE_NOT_READY: {exc}",),
+            )
 
         recommendations: list[Recommendation] = []
-        game_summaries: list[dict[str, Any]] = []
 
         bdl_rows = {
             int(row["id"]): row
@@ -162,19 +225,5 @@ class LiveRecommendationEngine:
                 continue
 
             recommendations.extend(game_recommendations)
-            game_summaries.append(
-                {
-                    "canonical_game_id": game.canonical_game_id,
-                    "away_team": game.away_team,
-                    "home_team": game.home_team,
-                    "away_score": game.away_score,
-                    "home_score": game.home_score,
-                    "period": game.period,
-                    "clock_seconds": game.clock_seconds,
-                    "event_sequence": game.event_sequence,
-                    "state_age_seconds": game.age_seconds,
-                    "status": game.status,
-                }
-            )
 
-        return tuple(recommendations), tuple(game_summaries), tuple(errors)
+        return tuple(recommendations), game_summaries, tuple(errors)

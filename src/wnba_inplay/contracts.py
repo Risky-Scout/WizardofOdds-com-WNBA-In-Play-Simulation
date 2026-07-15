@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 FORBIDDEN_PUBLIC_FIELDS = {

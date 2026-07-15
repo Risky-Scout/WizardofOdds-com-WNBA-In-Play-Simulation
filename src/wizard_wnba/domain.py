@@ -213,12 +213,28 @@ class Recommendation:
     event_sequence: int
     generated_at: datetime
     expires_at: datetime
+    pmf: Mapping[int, float] = field(default_factory=dict)
     reasons: tuple[str, ...] = ()
     deep_link: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        from .odds_math import decimal_to_american
+
         value = asdict(self)
         value["status"] = self.status.value
         for key in ("generated_at", "expires_at"):
             value[key] = value[key].isoformat()
+
+        # Decimal prices remain internal implementation details. The public
+        # WizardofOdds.com product is American-odds only.
+        value.pop("decimal_odds", None)
+        fair_decimal = value.pop("fair_decimal_odds", None)
+        value["fair_american_odds"] = (
+            decimal_to_american(float(fair_decimal))
+            if fair_decimal is not None
+            and math.isfinite(float(fair_decimal))
+            and float(fair_decimal) > 1.0
+            else None
+        )
+        value["odds_format"] = "american"
         return value

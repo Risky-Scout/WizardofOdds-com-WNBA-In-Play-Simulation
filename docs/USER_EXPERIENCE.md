@@ -68,3 +68,18 @@ Avoid:
 
 The public record should show all published recommendations, including losses
 and withdrawals, using the originally captured line and price.
+
+
+## Version 0.2 public experience
+
+The live page now supports:
+
+- the production URL path under `/tools/odds-scanner/predictions/WNBA/In-Play/Simulation/`;
+- American odds only;
+- Bovada in the sportsbook preference list;
+- browser-persisted sportsbook, market, ROI, grade, freshness, and favorite filters;
+- browser notifications for newly published opportunities that match preferences;
+- Scenario Lab for custom line, price, remaining-minutes, and uncertainty assumptions.
+
+Preferences are presentation filters. They do not alter the authoritative model,
+lower the 2% system floor, or create separate simulations for each user.

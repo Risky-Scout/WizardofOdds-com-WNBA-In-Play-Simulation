@@ -5,10 +5,6 @@ import json
 import math
 
 from wnba_inplay.api import ReferenceAPI
-from wnba_inplay.contracts import (
-    MarketOutput,
-    RunMetadata,
-)
 from wnba_inplay.demo import build_demo_request
 from wnba_inplay.service import SimulationService
 from wnba_inplay.validation import (

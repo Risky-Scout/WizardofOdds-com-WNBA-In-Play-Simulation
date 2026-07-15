@@ -30,7 +30,7 @@ MAX_MARKET_AGE_SECONDS=12
 PUBLICATION_TTL_SECONDS=20
 DEFAULT_SIMULATIONS=20000
 ODDS_REGIONS=us
-ODDS_BOOKMAKERS=
+ODDS_BOOKMAKERS=draftkings,fanduel,caesars,betmgm,betrivers,fanatics,bovada
 ODDS_MARKETS=player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists,h2h,spreads,totals
 EOF
 

@@ -189,6 +189,7 @@ class AdaptivePolicy:
             event_sequence=game.event_sequence,
             generated_at=generated_at,
             expires_at=generated_at + timedelta(seconds=self.publication_ttl_seconds),
+            pmf=dict(probability.pmf),
             reasons=tuple(reasons),
             deep_link=offer.deep_link,
         )

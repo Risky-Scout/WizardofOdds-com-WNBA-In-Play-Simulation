@@ -17,6 +17,8 @@ services:
       start_period: 15s
 
   worker:
+    healthcheck:
+      disable: true
     build: .
     image: wizardofodds/wnba-inplay:local
     command: wizard-wnba-worker

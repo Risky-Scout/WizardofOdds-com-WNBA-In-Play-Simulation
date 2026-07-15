@@ -19,6 +19,7 @@ def test_api_health_and_dashboard():
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
+        assert health.json()["odds_format"] == "american"
         dashboard = client.get("/")
         assert dashboard.status_code == 200
         assert "Best available opportunities" in dashboard.text

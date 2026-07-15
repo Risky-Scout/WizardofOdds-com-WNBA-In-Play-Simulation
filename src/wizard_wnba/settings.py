@@ -43,7 +43,13 @@ class Settings(BaseSettings):
         alias="THE_ODDS_API_SPORT_KEY",
     )
     odds_regions: str = Field(default="us", alias="ODDS_REGIONS")
-    odds_bookmakers: str = Field(default="", alias="ODDS_BOOKMAKERS")
+    odds_bookmakers: str = Field(
+        default=(
+            "draftkings,fanduel,caesars,betmgm,betrivers,"
+            "fanatics,bovada"
+        ),
+        alias="ODDS_BOOKMAKERS",
+    )
     odds_markets: str = Field(
         default=(
             "player_points,player_rebounds,player_assists,player_threes,"

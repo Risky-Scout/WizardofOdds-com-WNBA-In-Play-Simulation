@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import UTC, datetime
 import hashlib
 import json

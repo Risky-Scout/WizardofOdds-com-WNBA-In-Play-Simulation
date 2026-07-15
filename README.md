@@ -74,10 +74,10 @@ The adaptive requirement increases for:
 - weaker calibration;
 - late-game states.
 
-Expected ROI is:
+Expected ROI is calculated internally from the American price after conversion to its decimal payout multiplier:
 
 ```text
-p_win × (decimal_odds - 1) - p_loss
+p_win × (payout_multiplier - 1) - p_loss
 ```
 
 Push probability is returned to the bettor and is not counted as a win or loss.
@@ -128,6 +128,52 @@ runtime and installed only with:
 ```bash
 python -m pip install -e ".[sportsdataverse]"
 ```
+
+
+## Public product experience
+
+The production page is available at:
+
+```text
+/tools/odds-scanner/predictions/WNBA/In-Play/Simulation/
+```
+
+The simulation is server-managed and always on during active WNBA games. Users
+do not launch separate copies of the core simulation. The page subscribes to one
+authoritative live snapshot over WebSocket with HTTP fallback.
+
+The public experience includes:
+
+- live game state and engine health;
+- Published, Qualified, Watchlist, and All views;
+- browser-persisted sportsbook and market preferences;
+- favorite team/player text filters;
+- minimum conservative-ROI and grade filters;
+- market-freshness preferences;
+- optional browser alerts;
+- a user-defined Scenario Lab;
+- American odds throughout the public UI and API;
+- Bovada among the supported sportsbook filters.
+
+Scenario Lab results are explicitly marked as user-defined and are never
+promoted into the official recommendation stream.
+
+## Bovada source policy
+
+Bovada is requested through **The Odds API** using bookmaker key `bovada`.
+This is the production path because the existing adapter already provides:
+
+- one normalized schema across books;
+- American odds;
+- event and player-prop market support where covered;
+- quota and error handling;
+- historical snapshot compatibility;
+- lower parser-maintenance risk.
+
+A direct Bovada site-feed adapter is not enabled in production. It may be built
+later as a shadow-only resilience feed after legal/terms review, schema-contract
+tests, rate-limit controls, and monitoring. It must never silently replace the
+primary source or create duplicate Bovada rows.
 
 ## Quick start in demo mode
 

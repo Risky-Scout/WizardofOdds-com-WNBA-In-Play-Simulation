@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import time
 
 from .contracts import MarketSpec, RunMetadata

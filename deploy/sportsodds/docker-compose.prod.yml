@@ -21,6 +21,8 @@ services:
       start_period: 15s
 
   worker:
+    healthcheck:
+      disable: true
     image: ${IMAGE_URI:?IMAGE_URI is required}
     command: wizard-wnba-worker --mode live
     env_file: /opt/wizard-wnba/.env

@@ -13,6 +13,11 @@ __all__ = [
     "EventSequenceError",
     "InvalidStateError",
     "StateEngine",
+    "SimulationRequest",
+    "SimulationService",
+    "MarketSpec",
+    "RunMetadata",
+    "SimulationReport",
 ]
 
 from .service import SimulationRequest, SimulationService
