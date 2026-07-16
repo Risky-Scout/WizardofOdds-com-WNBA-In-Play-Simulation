@@ -532,7 +532,7 @@ async function runScenario(event) {
   // line — the user must reselect a current one.
   try {
     const feed = await fetchJson(
-      `/api/v1/live-markets?refresh=${Date.now()}`,
+      `api/v1/live-markets?refresh=${Date.now()}`,
     );
     state.liveMarkets = feed.markets || [];
   } catch (refreshError) {
@@ -624,7 +624,7 @@ async function runScenario(event) {
 
   try {
     const result = await fetchSimulation(
-      "/api/v1/live-reference-simulation",
+      "api/v1/live-reference-simulation",
       {
         method: "POST",
         headers: {"content-type": "application/json"},
@@ -654,15 +654,15 @@ async function refresh() {
   try {
     if (!state.options) {
       state.options = await fetchJson(
-        `/api/v1/product-options?refresh=${Date.now()}`,
+        `api/v1/product-options?refresh=${Date.now()}`,
       );
 
       populateOptions();
     }
 
     const [snapshot, marketFeed] = await Promise.all([
-      fetchJson(`/api/v1/snapshot?refresh=${Date.now()}`),
-      fetchJson(`/api/v1/live-markets?refresh=${Date.now()}`),
+      fetchJson(`api/v1/snapshot?refresh=${Date.now()}`),
+      fetchJson(`api/v1/live-markets?refresh=${Date.now()}`),
     ]);
 
     state.liveMarkets = marketFeed.markets || [];
