@@ -80,6 +80,19 @@ def production_model_dict() -> dict[str, Any]:
             "sample_size": 47352,
             "probability_source": "possession_raw_probability",
             "promotion_passed": True,
+            # Honest per-market gate: h2h validated, others accumulating.
+            "per_market_gate": {
+                "h2h": {"passed": True, "selected_bets": 166,
+                        "calibration_slope": 0.864,
+                        "bootstrap_roi_lower_95": 0.239},
+                "spreads": {"passed": False, "selected_bets": 117,
+                            "calibration_slope": 1.366},
+                "totals": {"passed": False, "selected_bets": 105,
+                           "bootstrap_roi_lower_95": -0.13},
+                "player_points": {"passed": False, "selected_bets": 0},
+                "player_rebounds": {"passed": False, "selected_bets": 0},
+                "player_threes": {"passed": False, "selected_bets": 0},
+            },
         },
     }
 

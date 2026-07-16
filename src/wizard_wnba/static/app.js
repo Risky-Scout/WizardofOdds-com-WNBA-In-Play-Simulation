@@ -451,10 +451,21 @@ function renderScenarioResult(result) {
     ? `<p class="calibration-badge">${escapeHtml(result.calibration_status)}</p>`
     : "";
 
+  // Per-market validation badge, driven strictly by the bundle's per-market
+  // OOS gate result. A market only shows "OOS validated" if it earned it.
+  const validated = result.oos_validated === true;
+  const validation = `
+    <p class="validation-badge ${validated ? "validated" : "accumulating"}">
+      ${validated
+        ? "OOS validated"
+        : "Pricing live — validation accumulating"}
+    </p>`;
+
   byId("scenario-result").innerHTML = `
     <div class="result-grid">
       ${cells.join("")}
     </div>
+    ${validation}
     ${calibration}
     <p class="simulation-note">
       ${escapeHtml(result.note || "")}

@@ -30,6 +30,7 @@ from .publication import AtomicPublicationStore
 from .scenario import ScenarioRequest, run_scenario
 from .live_markets import build_live_market_feed
 from .logging_redaction import install_log_redaction
+from .model_bundle import load_per_market_validation
 from .live_reference import (
     LiveReferenceError,
     simulate_live_reference,
@@ -218,13 +219,26 @@ async def product_options() -> dict[str, Any]:
     }
 
 
+def _annotate_validation(feed: dict[str, Any]) -> dict[str, Any]:
+    """Tag each market row with the production bundle's per-market OOS gate
+    result so the UI can badge validated vs accumulating markets honestly."""
+    validation = load_per_market_validation(settings.data_dir)
+    for market in feed.get("markets", []):
+        market["oos_validated"] = bool(
+            validation.get(str(market.get("market_key")), False)
+        )
+    feed["per_market_validation"] = validation
+    return feed
+
+
 @app.get("/api/v1/live-markets")
 async def live_markets() -> dict[str, Any]:
     current = publication_store.read()
-    return build_live_market_feed(
+    feed = build_live_market_feed(
         settings.data_dir,
         list(current.get("games", [])),
     )
+    return _annotate_validation(feed)
 
 
 @app.get("/api/v1/recommendations")
@@ -296,7 +310,7 @@ async def live_reference_simulation(
         list(snapshot_value.get("games", [])),
     )
     try:
-        return await run_in_threadpool(lambda: simulate_live_reference(
+        result = await run_in_threadpool(lambda: simulate_live_reference(
             data_dir=settings.data_dir,
             snapshot=snapshot_value,
             market_feed=market_feed,
@@ -311,6 +325,14 @@ async def live_reference_simulation(
         ))
     except LiveReferenceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Honest per-market validation badge: True only if this market passed its
+    # per-market OOS gate in the production bundle.
+    validation = load_per_market_validation(settings.data_dir)
+    result["oos_validated"] = bool(
+        validation.get(str(result.get("market_key")), False)
+    )
+    return result
 
 
 @app.post("/api/v1/scenario-lab")

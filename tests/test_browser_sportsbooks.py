@@ -187,6 +187,7 @@ def _install_routes(page, state):
             body=json.dumps(
                 {
                     "market_id": payload.get("market_id"),
+                    "market_key": "h2h",
                     "win_probability": 0.55,
                     "push_probability": 0.0,
                     "loss_probability": 0.45,
@@ -197,6 +198,7 @@ def _install_routes(page, state):
                     "projected_mean": None,
                     "total_uncertainty": 0.03,
                     "calibration_status": "OOS_CALIBRATED",
+                    "oos_validated": True,
                     "note": "browser-test",
                 }
             ),
@@ -262,6 +264,12 @@ def test_six_sportsbook_browser_flow(server):
         # h2h omits the line entirely.
         assert "line" not in body or body["line"] is None
         page.wait_for_selector(".result-grid")
+
+        # Per-market validation badge renders from oos_validated.
+        badge = page.locator(".validation-badge")
+        assert badge.count() == 1
+        assert "OOS validated" in badge.inner_text()
+        assert "validated" in (badge.get_attribute("class") or "")
 
         # (5) Expired line: drop the selected FanDuel market on refresh; submit
         # must force reselection and must NOT fall back to Bovada.

@@ -493,3 +493,23 @@ form button,
   letter-spacing: 0.08em;
   text-align: center;
 }
+
+.validation-badge {
+  margin: 12px 0 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  font-weight: bold;
+}
+
+.validation-badge.validated {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.validation-badge.accumulating {
+  border-color: var(--gold);
+  color: var(--gold);
+}

@@ -48,6 +48,21 @@ class ModelBundle:
     def model_version(self) -> str:
         return self.metadata.model_version
 
+    @property
+    def per_market_validation(self) -> dict[str, bool]:
+        """Per-market OOS gate outcome, {market: passed}. Empty when the bundle
+        carries no per-market gate (older bundles) — callers then treat every
+        market as not-yet-validated, so no market shows a validated badge it
+        did not earn."""
+        gate = self.validation_report.get("per_market_gate")
+        if not isinstance(gate, dict):
+            return {}
+        out: dict[str, bool] = {}
+        for market, result in gate.items():
+            if isinstance(result, dict):
+                out[str(market)] = bool(result.get("passed", False))
+        return out
+
     @classmethod
     def load(cls, path: Path) -> "ModelBundle":
         if not path.exists():
@@ -140,3 +155,13 @@ class ModelBundle:
             validation_report=validation,
             model_hash=model_hash,
         )
+
+
+def load_per_market_validation(data_dir: Path) -> dict[str, bool]:
+    """Best-effort {market: validated} from the production bundle. Returns {}
+    (all markets not-validated) on any load/parse failure — safe by default."""
+    path = data_dir / "models" / "production.json"
+    try:
+        return ModelBundle.load(path).per_market_validation
+    except Exception:
+        return {}
