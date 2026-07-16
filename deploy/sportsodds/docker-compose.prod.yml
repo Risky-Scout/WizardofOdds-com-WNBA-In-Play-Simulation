@@ -3,8 +3,10 @@ services:
     image: ${IMAGE_URI:?IMAGE_URI is required}
     command: wizard-wnba-api
     env_file: /opt/wizard-wnba/.env
-    ports:
-      - "127.0.0.1:8080:8080"
+    # sportsodds uses CSF with FORWARD DROP. Bridge-published ports via
+    # docker-proxy fail there; host networking keeps the API on :8080 while
+    # CSF still blocks external access to 8080 (not in TCP_IN).
+    network_mode: host
     volumes:
       - /opt/wizard-wnba/data:/data
     restart: unless-stopped
@@ -24,6 +26,7 @@ services:
     image: ${IMAGE_URI:?IMAGE_URI is required}
     command: wizard-wnba-worker --mode live
     env_file: /opt/wizard-wnba/.env
+    network_mode: host
     volumes:
       - /opt/wizard-wnba/data:/data
     restart: unless-stopped
@@ -35,7 +38,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    # Real health based on heartbeat freshness (reads /data volume).
     healthcheck:
       test: ["CMD", "wizard-wnba-worker", "--healthcheck"]
       interval: 20s
