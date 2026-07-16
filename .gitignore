@@ -14,3 +14,7 @@ artifacts/
 .DS_Store
 .test-data/
 tmpdata/
+
+# Local verification run dirs
+.localdata/
+.localdata_live/

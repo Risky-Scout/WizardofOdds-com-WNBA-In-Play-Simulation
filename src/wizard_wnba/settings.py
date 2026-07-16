@@ -27,6 +27,11 @@ class Settings(BaseSettings):
         default="http://localhost:8080",
         alias="PUBLIC_BASE_URL",
     )
+    # ASGI root_path / proxy prefix. Leave empty when the reverse proxy routes
+    # the whole origin (e.g. a dedicated subdomain) to the app. Set it to the
+    # mounted subpath (e.g. /tools/odds-scanner/predictions/WNBA/In-Play/
+    # Simulation) ONLY when the proxy strips that prefix before forwarding.
+    root_path: str = Field(default="", alias="ROOT_PATH")
 
     balldontlie_api_key: str = Field(default="", alias="BALLDONTLIE_API_KEY")
     balldontlie_base_url: str = Field(

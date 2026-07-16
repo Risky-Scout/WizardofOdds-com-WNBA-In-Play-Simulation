@@ -21,8 +21,6 @@ services:
       start_period: 15s
 
   worker:
-    healthcheck:
-      disable: true
     image: ${IMAGE_URI:?IMAGE_URI is required}
     command: wizard-wnba-worker --mode live
     env_file: /opt/wizard-wnba/.env
@@ -37,3 +35,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Real health based on heartbeat freshness (reads /data volume).
+    healthcheck:
+      test: ["CMD", "wizard-wnba-worker", "--healthcheck"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

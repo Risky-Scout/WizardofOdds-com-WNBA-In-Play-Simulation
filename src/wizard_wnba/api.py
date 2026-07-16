@@ -82,6 +82,10 @@ app = FastAPI(
         "conservative-ROI recommendation, preferences, and scenario service."
     ),
     lifespan=lifespan,
+    # Empty by default (served at /). When the reverse proxy strips a subpath
+    # prefix, set ROOT_PATH so generated URLs (OpenAPI/docs/redirects) are
+    # correct. The app also serves the literal public subpath route directly.
+    root_path=settings.root_path,
 )
 
 static_dir = Path(__file__).with_name("static")
@@ -393,6 +397,8 @@ def run() -> None:
         port=8080,
         reload=False,
         proxy_headers=True,
+        forwarded_allow_ips="*",
+        root_path=get_settings().root_path,
     )
 
 

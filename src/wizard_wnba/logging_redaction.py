@@ -23,22 +23,22 @@ def redact(text: str) -> str:
 
 
 class RedactingFilter(logging.Filter):
-    """A logging filter that scrubs secrets from formatted log output."""
+    """A logging filter that scrubs secrets from formatted log output.
+
+    It redacts the *fully formatted* message (message % args), so secrets are
+    caught even when they arrive as non-string args — e.g. httpx logs the
+    request URL (which carries ``apiKey=``) as an ``httpx.URL`` object, not a
+    ``str``. Formatting first, then folding the result back into ``msg`` with
+    empty args, guarantees the emitted line is scrubbed regardless of arg type.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if isinstance(record.msg, str):
-                record.msg = redact(record.msg)
-            if isinstance(record.args, tuple):
-                record.args = tuple(
-                    redact(arg) if isinstance(arg, str) else arg
-                    for arg in record.args
-                )
-            elif isinstance(record.args, dict):
-                record.args = {
-                    key: (redact(value) if isinstance(value, str) else value)
-                    for key, value in record.args.items()
-                }
+            formatted = record.getMessage()
+            redacted = redact(formatted)
+            if redacted != formatted:
+                record.msg = redacted
+                record.args = ()
         except Exception:  # pragma: no cover - never break logging
             pass
         return True
