@@ -7,6 +7,7 @@ from wizard_wnba.calibration import (
     BetaCalibrator,
     CalibrationError,
     CalibrationRegistry,
+    UnsupportedMarketError,
 )
 from wizard_wnba.domain import ProbabilityEstimate
 
@@ -49,3 +50,49 @@ def test_required_calibrator_fails_closed():
             key="player_points",
             require=True,
         )
+
+
+def test_missing_calibrator_raises_unsupported_market_never_none():
+    # An unsupported market must raise a typed UnsupportedMarketError — never
+    # return None (which would blow up on the caller's .validate()).
+    registry = CalibrationRegistry(
+        {"player_points": BetaCalibrator("identity", 1, -1, 0)}
+    )
+    with pytest.raises(UnsupportedMarketError) as excinfo:
+        registry.calibrator_for("player_assists")
+    assert excinfo.value.market_key == "player_assists"
+
+    with pytest.raises(UnsupportedMarketError):
+        registry.apply(estimate(), key="player_assists", require=True)
+
+
+def test_unsupported_market_error_is_calibration_error_subclass():
+    assert issubclass(UnsupportedMarketError, CalibrationError)
+
+
+def test_eligibility_is_enforced_and_narrows_to_calibrated_markets():
+    registry = CalibrationRegistry(
+        {
+            "player_points": BetaCalibrator("pp", 1, -1, 0),
+            "h2h": BetaCalibrator("h2h", 1, -1, 0),
+        },
+        eligible_markets={"player_points", "player_assists"},
+    )
+    # Eligibility never exceeds what we can actually calibrate.
+    assert registry.eligible_markets == {"player_points"}
+    assert registry.is_eligible("player_points")
+    assert not registry.is_eligible("h2h")
+    assert not registry.is_eligible("player_assists")
+
+
+def test_apply_returns_estimate_not_none_when_not_required():
+    registry = CalibrationRegistry({})
+    output = registry.apply(estimate(), key="player_assists", require=False)
+    assert output is not None
+    assert isinstance(output, ProbabilityEstimate)
+
+
+def test_calibrator_for_returns_valid_calibrator():
+    calibrator = BetaCalibrator("pp", 1, -1, 0)
+    registry = CalibrationRegistry({"player_points": calibrator})
+    assert registry.calibrator_for("player_points") is calibrator

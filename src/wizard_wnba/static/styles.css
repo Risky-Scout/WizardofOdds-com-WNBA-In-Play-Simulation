@@ -400,38 +400,96 @@ form button,
 }
 
 
-/* Scenario Lab stable non-overlapping layout */
+/* Scenario Lab — stable, non-overlapping layout.
+   The form is a vertical stack of fieldset groups; each group is its own grid.
+   Hidden controls use display:none so they are removed from the flow entirely
+   and can never overlay or block the sportsbook selector or the submit button. */
 .scenario-grid {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) !important;
-  gap: 20px !important;
-  align-items: start !important;
-  overflow: visible !important;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) 1fr;
+  gap: 24px;
+  align-items: start;
+  overflow: visible;
+}
+
+@media (max-width: 900px) {
+  .scenario-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .scenario-grid form,
 .scenario-result {
-  position: relative !important;
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .scenario-grid form {
-  z-index: 2 !important;
-  overflow: visible !important;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: visible;
+}
+
+.scenario-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 14px 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.scenario-group legend {
+  padding: 0 6px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.scenario-group .wide {
+  grid-column: 1 / -1;
 }
 
 .scenario-result {
-  z-index: 1 !important;
-  min-height: 220px !important;
+  min-height: 220px;
 }
 
 .scenario-grid label,
 .scenario-grid select,
 .scenario-grid input,
 .scenario-grid button {
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.scenario-grid input[readonly] {
+  background: #0b1a26;
+  color: var(--muted);
+  cursor: default;
+}
+
+/* Hidden controls are fully removed from layout — never an overlay. */
+.scenario-grid .hidden {
+  display: none !important;
+}
+
+#scenario-submit {
+  align-self: stretch;
+}
+
+.calibration-badge {
+  margin: 12px 0 0;
+  padding: 6px 9px;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-align: center;
 }

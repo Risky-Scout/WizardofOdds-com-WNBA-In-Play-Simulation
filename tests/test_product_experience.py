@@ -31,8 +31,11 @@ def test_public_route_preferences_and_scenario_lab():
         )
         assert page.status_code == 200
         assert "Scenario Lab" in page.text
-        assert "My WNBA preferences" in page.text
-        assert "AMERICAN" in page.text
+        # The Scenario Lab separates the live sportsbook line from the custom
+        # hypothetical scenario, and labels the market as not an official pick.
+        assert "Live sportsbook line" in page.text
+        assert "Custom hypothetical scenario" in page.text
+        assert "NOT AN OFFICIAL PICK" in page.text
 
         options = client.get("/api/v1/product-options")
         assert options.status_code == 200

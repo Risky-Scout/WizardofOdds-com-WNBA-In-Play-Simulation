@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -28,11 +29,13 @@ from .product import (
 from .publication import AtomicPublicationStore
 from .scenario import ScenarioRequest, run_scenario
 from .live_markets import build_live_market_feed
+from .logging_redaction import install_log_redaction
 from .live_reference import (
     LiveReferenceError,
     simulate_live_reference,
 )
 from .settings import get_settings
+from .worker import heartbeat_age_seconds
 from starlette.concurrency import run_in_threadpool
 
 
@@ -60,6 +63,7 @@ class LiveReferenceScenarioRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    install_log_redaction()
     if not publication_store.path.exists():
         publication_store.write(
             build_demo_snapshot(
@@ -109,17 +113,87 @@ async def public_simulation_page() -> FileResponse:
     return _index_file()
 
 
-@app.get("/health")
-async def health() -> dict[str, Any]:
+def _parse_iso(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def build_health() -> dict[str, Any]:
+    """Report true readiness, not merely that Uvicorn answered.
+
+    The service is only healthy when a live worker completed a cycle recently
+    (fresh heartbeat) and the published snapshot is neither stale nor
+    fail-closed.
+    """
+    now = datetime.now(UTC)
     snapshot = publication_store.read()
+    metrics = snapshot.get("metrics", {}) if isinstance(snapshot, dict) else {}
+
+    # Heartbeat freshness: prefer the worker heartbeat file, fall back to the
+    # heartbeat timestamp embedded in the snapshot metrics.
+    heartbeat_age = heartbeat_age_seconds(settings.data_dir)
+    if heartbeat_age is None:
+        beat_at = _parse_iso(metrics.get("worker_heartbeat_at"))
+        if beat_at is not None:
+            heartbeat_age = max(0.0, (now - beat_at).total_seconds())
+
+    # A heartbeat older than several cycles means the worker has stalled.
+    stale_after = max(60.0, settings.game_discovery_seconds * 3.0)
+    heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= stale_after
+
+    if heartbeat_age is None:
+        worker_status = "NO_HEARTBEAT"
+    elif heartbeat_fresh:
+        worker_status = str(metrics.get("worker_status") or "HEALTHY")
+    else:
+        worker_status = "STALE"
+
+    # Snapshot freshness: a snapshot that has not been regenerated recently is
+    # rejected even if its contents look fine.
+    generated_at = _parse_iso(snapshot.get("generated_at"))
+    snapshot_age = (
+        max(0.0, (now - generated_at).total_seconds())
+        if generated_at is not None
+        else None
+    )
+    snapshot_fresh = snapshot_age is not None and snapshot_age <= stale_after
+
+    engine_status = snapshot.get("engine_status")
+    healthy = (
+        heartbeat_fresh
+        and snapshot_fresh
+        and worker_status not in {"STALE", "NO_HEARTBEAT", "DEGRADED"}
+        and engine_status not in {"DEGRADED", "STARTING", None}
+    )
+
     return {
-        "status": "ok",
+        "status": "ok" if healthy else "degraded",
+        "healthy": healthy,
         "service": "wizardofodds-wnba-inplay",
         "environment": settings.environment,
-        "engine_status": snapshot.get("engine_status"),
+        "engine_status": engine_status,
         "data_status": snapshot.get("data_status"),
+        "worker_status": worker_status,
+        "worker_heartbeat_age_seconds": heartbeat_age,
+        "worker_heartbeat_fresh": heartbeat_fresh,
+        "worker_cycle": metrics.get("worker_cycle"),
+        "snapshot_age_seconds": snapshot_age,
+        "snapshot_fresh": snapshot_fresh,
+        "staleness_threshold_seconds": stale_after,
         "odds_format": PUBLIC_ODDS_FORMAT,
     }
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return build_health()
 
 
 @app.get("/api/v1/snapshot")

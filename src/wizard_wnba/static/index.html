@@ -62,53 +62,64 @@
 
       <div class="scenario-grid">
         <form id="scenario-form">
-          <label class="wide">
-            <span>Live selection</span>
-            <select id="scenario-selection" required disabled>
-              <option value="">No modeled live selections available</option>
-            </select>
-          </label>
+          <fieldset class="scenario-group" id="live-line-group">
+            <legend>Live sportsbook line</legend>
 
-          <label>
-            <span>Side</span>
-            <select id="scenario-side">
-              <option value="over">Over</option>
-              <option value="under">Under</option>
-              <option value="home">Home</option>
-              <option value="away">Away</option>
-            </select>
-          </label>
+            <label class="wide">
+              <span>Sportsbook selection</span>
+              <select id="scenario-selection" required disabled>
+                <option value="">No modeled live selections available</option>
+              </select>
+            </label>
 
-          <label>
-            <span>Custom line</span>
-            <input id="scenario-line" type="number" step="0.5">
-          </label>
+            <label id="scenario-line-field">
+              <span>Live line</span>
+              <input id="scenario-line" type="number" step="0.5" readonly>
+              <small>From the selected sportsbook. Read-only.</small>
+            </label>
 
-          <label>
-            <span>American odds</span>
-            <input
-              id="scenario-odds"
-              type="number"
-              step="1"
-              placeholder="-110 or +105"
-            >
-          </label>
+            <label>
+              <span>Live American odds</span>
+              <input
+                id="scenario-odds"
+                type="number"
+                step="1"
+                readonly
+                placeholder="Select a line"
+              >
+              <small>From the selected sportsbook. Read-only.</small>
+            </label>
+          </fieldset>
 
-          <label id="current-total-field" class="hidden">
-            <span>Player's current total</span>
-            <input id="scenario-current-total" type="number" min="0" step="1">
-          </label>
+          <fieldset class="scenario-group" id="custom-scenario-group">
+            <legend>Custom hypothetical scenario</legend>
 
-          <label class="wide">
-            <span>Time remaining</span>
-            <input id="scenario-time" type="text" placeholder="8:24">
-            <small>
-              Uses the current live clock. Edit only to test another point.
-            </small>
-          </label>
+            <label>
+              <span>Side</span>
+              <select id="scenario-side">
+                <option value="over">Over</option>
+                <option value="under">Under</option>
+                <option value="home">Home</option>
+                <option value="away">Away</option>
+              </select>
+            </label>
+
+            <label id="current-total-field" class="hidden">
+              <span>Player's current total</span>
+              <input id="scenario-current-total" type="number" min="0" step="1">
+            </label>
+
+            <label class="wide">
+              <span>Time remaining</span>
+              <input id="scenario-time" type="text" placeholder="8:24">
+              <small>
+                Uses the current live clock. Edit only to test another point.
+              </small>
+            </label>
+          </fieldset>
 
           <button id="scenario-submit" type="submit" disabled>
-            Run custom scenario
+            Run simulation
           </button>
 
           <p id="scenario-error" class="error"></p>
@@ -177,6 +188,6 @@
     
   </main>
 
-  <script src="/static/app.js?v=simulator-v3" defer></script>
+  <script src="/static/app.js?v=sportsbook-integrity-v2" defer></script>
 </body>
 </html>

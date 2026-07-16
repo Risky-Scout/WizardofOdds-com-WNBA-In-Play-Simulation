@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Mapping, Sequence
 
-from .calibration import BetaCalibrator, CalibrationRegistry
+from .calibration import (
+    BetaCalibrator,
+    CalibrationRegistry,
+    UnsupportedMarketError,
+)
 from .consensus import build_consensus
 from .domain import (
     GameState,
@@ -17,6 +22,16 @@ from .recommendation import AdaptivePolicy
 from .simulation import MonteCarloEngine, SimulationBundle
 
 
+logger = logging.getLogger(__name__)
+
+
+# The possession walk-forward model is trained on this probability source. The
+# Monte Carlo (legacy) live engine produces the same possession-raw win
+# probability before calibration, so the promoted Platt calibrators are only
+# applied when the source matches.
+POSSESSION_PROBABILITY_SOURCE = "possession_raw_probability"
+
+
 @dataclass(frozen=True)
 class ModelMetadata:
     model_version: str
@@ -27,6 +42,14 @@ class ModelMetadata:
     calibration_parameters: Mapping[str, tuple[float, float, float]] = field(
         default_factory=dict
     )
+    probability_source: str = POSSESSION_PROBABILITY_SOURCE
+
+    @property
+    def eligible_markets(self) -> frozenset[str]:
+        # A market is eligible iff the promoted model actually ships a
+        # calibrator for it. This is what excludes player_assists and
+        # player_points_rebounds_assists from production.
+        return frozenset(self.calibration_parameters)
 
 
 class RecommendationPipeline:
@@ -59,12 +82,36 @@ class RecommendationPipeline:
         )
         recommendations: list[Recommendation] = []
 
+        registry = CalibrationRegistry(
+            {
+                key: BetaCalibrator(
+                    calibrator_id=f"{model.calibrator_id}:{key}",
+                    a=parameters[0],
+                    b=parameters[1],
+                    c=parameters[2],
+                )
+                for key, parameters in model.calibration_parameters.items()
+            },
+            eligible_markets=model.eligible_markets,
+        )
+
         for offer in offers:
             if offer.canonical_game_id != game.canonical_game_id:
                 continue
             if offer.line is None and offer.market_key != "h2h":
                 continue
             if offer.side not in {"over", "under"}:
+                continue
+
+            # Skip unsupported markets BEFORE pricing or calibrator lookup. An
+            # unsupported market is a nonfatal per-market skip, never a global
+            # engine failure and never a None passed on to .validate().
+            if not registry.is_eligible(offer.market_key):
+                logger.debug(
+                    "skipping unsupported market %s for %s",
+                    offer.market_key,
+                    offer.offer_id,
+                )
                 continue
 
             probability = self._price_offer(
@@ -74,20 +121,20 @@ class RecommendationPipeline:
             )
             if probability is None:
                 continue
-            calibrators = {
-                key: BetaCalibrator(
-                    calibrator_id=f"{model.calibrator_id}:{key}",
-                    a=parameters[0],
-                    b=parameters[1],
-                    c=parameters[2],
+
+            try:
+                probability = registry.apply(
+                    probability,
+                    key=offer.market_key,
+                    require=True,
                 )
-                for key, parameters in model.calibration_parameters.items()
-            }
-            probability = CalibrationRegistry(calibrators).apply(
-                probability,
-                key=offer.market_key,
-                require=True,
-            )
+            except UnsupportedMarketError:
+                # Defense in depth: eligibility was already checked above.
+                logger.debug(
+                    "unsupported market %s slipped past eligibility filter",
+                    offer.market_key,
+                )
+                continue
 
             leave_one_out = build_consensus(
                 offers,

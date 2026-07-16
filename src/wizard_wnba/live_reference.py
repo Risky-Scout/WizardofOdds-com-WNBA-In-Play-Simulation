@@ -25,6 +25,12 @@ from wnba_inplay.simulation import (
     TeamSimulationProfile,
 )
 
+from .calibration import BetaCalibrator
+from .model_bundle import (
+    PRODUCTION_PERMITTED_MARKETS,
+    ModelBundle,
+    ModelBundleError,
+)
 from .odds_math import american_to_decimal
 from .optimization import (
     blend_conditional_probability,
@@ -33,6 +39,43 @@ from .optimization import (
     deterministic_seed,
     should_escalate_simulations,
 )
+
+
+# Cache the promoted production bundle by file mtime so we neither re-read it on
+# every simulation nor serve a stale copy after a promotion.
+_PRODUCTION_BUNDLE_CACHE: dict[str, tuple[float, "ModelBundle | None"]] = {}
+
+
+def _load_production_bundle(data_dir: Path) -> "ModelBundle | None":
+    path = data_dir / "models" / "production.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    key = str(path)
+    cached = _PRODUCTION_BUNDLE_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        bundle: ModelBundle | None = ModelBundle.load(path)
+    except ModelBundleError:
+        bundle = None
+    _PRODUCTION_BUNDLE_CACHE[key] = (mtime, bundle)
+    return bundle
+
+
+def _market_calibrator(
+    bundle: "ModelBundle | None", market_key: str
+) -> BetaCalibrator | None:
+    if bundle is None or market_key not in bundle.eligible_markets:
+        return None
+    params = bundle.metadata.calibration_parameters[market_key]
+    return BetaCalibrator(
+        calibrator_id=f"{bundle.metadata.calibrator_id}:{market_key}",
+        a=params[0],
+        b=params[1],
+        c=params[2],
+    )
 
 
 PLAYER_MARKET_STATS: dict[str, tuple[str, ...]] = {
@@ -799,6 +842,18 @@ def simulate_live_reference(
             "The selected live sportsbook line is no longer available."
         )
 
+    # Reject unsupported markets cleanly before any simulation work. Markets
+    # outside the production policy (e.g. player_assists,
+    # player_points_rebounds_assists) are never priced.
+    market_key = str(market.get("market_key") or "")
+    if market_key not in PRODUCTION_PERMITTED_MARKETS:
+        raise LiveReferenceError(
+            f"Market '{market_key}' is not an eligible production market."
+        )
+
+    production_bundle = _load_production_bundle(data_dir)
+    oos_calibrator = _market_calibrator(production_bundle, market_key)
+
     canonical_game_id = str(
         market.get("canonical_game_id") or ""
     )
@@ -973,6 +1028,13 @@ def simulate_live_reference(
 
     non_push = max(1.0 - output.p_push, 1e-12)
     raw_conditional_win = raw_p_win / non_push
+    # possession_raw_probability -> promoted market-specific OOS calibrator.
+    if oos_calibrator is not None:
+        base_conditional = oos_calibrator.transform(raw_conditional_win)
+        oos_calibrated = True
+    else:
+        base_conditional = raw_conditional_win
+        oos_calibrated = False
     original_line = market.get("line")
     exact_line = (
         line is None
@@ -1010,16 +1072,14 @@ def simulate_live_reference(
 
     if consensus_applied:
         conditional_win = blend_conditional_probability(
-            raw_conditional_win,
+            base_conditional,
             consensus.probability,
             consensus.weight,
         )
-        p_win = conditional_win * non_push
-        p_loss = (1.0 - conditional_win) * non_push
     else:
-        conditional_win = raw_conditional_win
-        p_win = raw_p_win
-        p_loss = raw_p_loss
+        conditional_win = base_conditional
+    p_win = conditional_win * non_push
+    p_loss = (1.0 - conditional_win) * non_push
 
     fair_decimal = (
         math.inf
@@ -1056,6 +1116,26 @@ def simulate_live_reference(
         - conservative_loss
     )
 
+    # Moneyline (h2h) is a two-way market: report the actual team side
+    # (home/away) with no line, and suppress the internal Bernoulli mean, which
+    # is not a meaningful point projection for a win/loss market.
+    is_h2h = market_key == "h2h"
+    if is_h2h:
+        is_home = _normalized_name(
+            str(market.get("selection") or "")
+        ) == _normalized_name(str(market.get("home_team") or ""))
+        display_side = "home" if is_home else "away"
+        display_line: float | None = None
+        display_projected_mean: float | None = None
+    else:
+        display_side = spec.side
+        display_line = spec.line
+        display_projected_mean = output.projected_mean
+
+    calibration_status = (
+        "OOS_CALIBRATED" if oos_calibrated else "NOT_OOS_CALIBRATED"
+    )
+
     return {
         "run_id": run_id,
         "market_id": market_id,
@@ -1063,8 +1143,8 @@ def simulate_live_reference(
         "selection": market.get("selection"),
         "bookmaker_key": market.get("bookmaker_key"),
         "bookmaker_title": market.get("bookmaker_title"),
-        "side": spec.side,
-        "line": spec.line,
+        "side": display_side,
+        "line": display_line,
         "american_odds": offered_american,
         "win_probability": p_win,
         "push_probability": output.p_push,
@@ -1072,7 +1152,7 @@ def simulate_live_reference(
         "fair_american_odds": _decimal_to_american(fair_decimal),
         "expected_roi": expected_roi,
         "conservative_roi": conservative_roi,
-        "projected_mean": output.projected_mean,
+        "projected_mean": display_projected_mean,
         "projected_variance": output.projected_variance,
         "monte_carlo_error": output.monte_carlo_error,
         "profile_uncertainty": profile_uncertainty,
@@ -1086,10 +1166,22 @@ def simulate_live_reference(
         "manifest": report.manifest.to_dict(),
         "engine": "wnba_inplay.InPlaySimulator",
         "engine_status": "LIVE_REFERENCE_ACTIVE",
-        "calibration_status": (
-            "MARKET_ANCHORED_NOT_OOS_CALIBRATED"
-            if consensus_applied
-            else "NOT_OOS_CALIBRATED"
+        "calibration_status": calibration_status,
+        "probability_source": "possession_raw_probability",
+        "model_version": (
+            production_bundle.model_version
+            if production_bundle is not None
+            else None
+        ),
+        "model_hash": (
+            production_bundle.model_hash
+            if production_bundle is not None
+            else None
+        ),
+        "calibrator_id": (
+            oos_calibrator.calibrator_id
+            if oos_calibrator is not None
+            else None
         ),
         "official_recommendation": False,
         "raw_model_win_probability": raw_p_win,
@@ -1108,9 +1200,14 @@ def simulate_live_reference(
         "note": (
             "This result uses the integrated possession-based simulator, "
             "deterministic common random numbers, adaptive Monte Carlo, "
-            "strict freshness gates, and a robust no-vig consensus "
-            "anchor when comparable books are available. "
-            "It is not an official published recommendation until WNBA-specific "
-            "out-of-sample calibrators are attached."
+            "strict freshness gates, "
+            + (
+                "the promoted WNBA out-of-sample market calibrator, "
+                if oos_calibrated
+                else "no out-of-sample calibrator, "
+            )
+            + "and a robust no-vig consensus anchor when comparable books are "
+            "available. Scenario Lab results are user-defined and not official "
+            "published picks."
         ),
     }

@@ -8,7 +8,11 @@ import re
 from typing import Any, Mapping
 
 from .adapters.balldontlie import BallDontLieClient
-from .adapters.the_odds_api import OddsQuota, TheOddsApiClient
+from .adapters.the_odds_api import (
+    EventOddsUnavailable,
+    OddsQuota,
+    TheOddsApiClient,
+)
 from .settings import Settings
 from .storage import RawSnapshotStore
 
@@ -69,6 +73,7 @@ class CollectionCycle:
     live_game_payloads: Mapping[int, LiveGamePayload]
     quota_remaining: int | None
     errors: tuple[str, ...]
+    skipped_events: tuple[str, ...] = ()
 
     @property
     def bdl_games(self) -> int:
@@ -102,6 +107,7 @@ class LiveCollector:
     async def collect_once(self) -> CollectionCycle:
         captured = datetime.now(UTC)
         errors: list[str] = []
+        skipped_events: list[str] = []
         bdl_games_payload: Mapping[str, Any] = {"data": []}
         odds_events_payload: list[Mapping[str, Any]] = []
         featured_odds_payload: list[Mapping[str, Any]] = []
@@ -164,6 +170,16 @@ class LiveCollector:
                 event_odds_payloads[event_id] = response.payload
                 self._archive(response, captured)
                 quota_remaining = OddsQuota.from_response(response).remaining
+            except EventOddsUnavailable:
+                # The event's in-play odds resource returned 404 (settled or
+                # removed). Record it as a nonfatal skip and keep processing
+                # the remaining events; do NOT add it to fatal errors.
+                skipped_events.append(event_id)
+                logger.info(
+                    "the_odds_api.event_odds[%s]: removed (HTTP 404), skipping",
+                    event_id,
+                )
+                continue
             except Exception as exc:
                 errors.append(
                     f"the_odds_api.event_odds[{event_id}]: {exc}"
@@ -178,6 +194,7 @@ class LiveCollector:
             live_game_payloads=live_game_payloads,
             quota_remaining=quota_remaining,
             errors=tuple(errors),
+            skipped_events=tuple(skipped_events),
         )
 
     async def _collect_live_game(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +20,27 @@ from .settings import Settings
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EngineResult:
+    """Outcome of one engine cycle.
+
+    ``errors`` are fatal (they degrade the engine); ``skips`` are nonfatal
+    data-quality gaps that must not degrade the engine or abort other games.
+    """
+
+    recommendations: tuple[Recommendation, ...]
+    games: tuple[dict[str, Any], ...]
+    errors: tuple[str, ...]
+    skips: tuple[str, ...]
+
+    def __iter__(self):
+        # Backwards-compatible 3-tuple unpacking:
+        #   recommendations, games, errors = engine.process(cycle)
+        yield self.recommendations
+        yield self.games
+        yield self.errors
 
 
 def summarize_live_games(
@@ -122,19 +143,25 @@ class LiveRecommendationEngine:
     def process(
         self,
         cycle: CollectionCycle,
-    ) -> tuple[tuple[Recommendation, ...], tuple[dict[str, Any], ...], tuple[str, ...]]:
-        errors: list[str] = []
+    ) -> "EngineResult":
+        # Fatal errors degrade the engine (status DEGRADED / fail-closed).
+        # Nonfatal skips are expected data-quality gaps (unmatched game,
+        # missing player profile, unsupported market) that must NOT degrade
+        # the whole engine or abort other games.
+        fatal_errors: list[str] = []
+        skips: list[str] = []
         game_summaries, summary_errors = summarize_live_games(cycle)
-        errors.extend(summary_errors)
+        skips.extend(summary_errors)
 
         try:
             bundle = ModelBundle.load(self.model_bundle_path)
         except ModelBundleError as exc:
-            return (
-                (),
-                game_summaries,
-                tuple(errors)
-                + (f"MODEL_BUNDLE_NOT_READY: {exc}",),
+            # No usable production model is a genuine fatal condition.
+            return EngineResult(
+                recommendations=(),
+                games=game_summaries,
+                errors=(f"MODEL_BUNDLE_NOT_READY: {exc}",),
+                skips=tuple(skips),
             )
 
         recommendations: list[Recommendation] = []
@@ -146,7 +173,7 @@ class LiveRecommendationEngine:
         for game_id, live_payload in cycle.live_game_payloads.items():
             row = bdl_rows.get(game_id)
             if row is None:
-                errors.append(f"GAME_ROW_MISSING:{game_id}")
+                skips.append(f"GAME_ROW_MISSING:{game_id}")
                 continue
 
             plays = list(live_payload.plays.get("data", []))
@@ -162,13 +189,13 @@ class LiveRecommendationEngine:
             )
             odds_event = match_odds_event(row, cycle.odds_events_payload)
             if odds_event is None:
-                errors.append(f"ODDS_EVENT_UNMATCHED:{game_id}")
+                skips.append(f"ODDS_EVENT_UNMATCHED:{game_id}")
                 continue
 
             event_id = str(odds_event["id"])
             odds_payload = cycle.event_odds_payloads.get(event_id)
             if odds_payload is None:
-                errors.append(f"EVENT_ODDS_MISSING:{event_id}")
+                skips.append(f"EVENT_ODDS_MISSING:{event_id}")
                 continue
 
             live_players = normalize_bdl_player_stats(
@@ -196,11 +223,18 @@ class LiveRecommendationEngine:
                     )
                 profiles[player_id] = profile
 
-            # A missing profile can distort correlated totals. Fail closed for
-            # the game instead of silently substituting a league average.
+            # A missing profile can distort correlated totals, so we fail
+            # closed for the affected game — but as a NONFATAL data-quality
+            # skip that leaves the engine HEALTHY and every other game running.
             if missing_profiles:
-                errors.append(
-                    f"PLAYER_PROFILES_MISSING:{game_id}:{','.join(missing_profiles)}"
+                skips.append(
+                    f"PLAYER_PROFILES_MISSING:{game_id}:"
+                    + ",".join(missing_profiles)
+                )
+                logger.info(
+                    "Skipping game %s: missing player profiles %s",
+                    game_id,
+                    missing_profiles,
                 )
                 continue
 
@@ -209,6 +243,13 @@ class LiveRecommendationEngine:
                 canonical_game_id=game.canonical_game_id,
                 identity=self.identity,
                 received_at=cycle.captured_at,
+            )
+            # Filter unsupported markets before pricing/simulation so an
+            # ineligible market (e.g. player_assists) never reaches the
+            # calibrator lookup.
+            eligible = bundle.eligible_markets
+            offers = tuple(
+                offer for offer in offers if offer.market_key in eligible
             )
             try:
                 game_recommendations = self.pipeline.evaluate_game(
@@ -221,9 +262,17 @@ class LiveRecommendationEngine:
                     seed=self.settings.random_seed + game.event_sequence,
                 )
             except Exception as exc:
-                errors.append(f"SIMULATION_FAILED:{game_id}:{exc}")
+                # A genuine simulation/pricing crash for one game is fatal
+                # (surfaced), but must not abort the remaining games.
+                fatal_errors.append(f"SIMULATION_FAILED:{game_id}:{exc}")
+                logger.exception("Simulation failed for game %s", game_id)
                 continue
 
             recommendations.extend(game_recommendations)
 
-        return tuple(recommendations), game_summaries, tuple(errors)
+        return EngineResult(
+            recommendations=tuple(recommendations),
+            games=game_summaries,
+            errors=tuple(fatal_errors),
+            skips=tuple(skips),
+        )

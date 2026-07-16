@@ -18,10 +18,17 @@ def test_api_health_and_dashboard():
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["status"] == "ok"
-        assert health.json()["odds_format"] == "american"
+        body = health.json()
+        # /health now reports true readiness: it must never claim "ok" merely
+        # because Uvicorn answered. With no live worker there is no fresh
+        # heartbeat, so the service reports "degraded" and surfaces why.
+        assert body["status"] in {"ok", "degraded"}
+        assert "worker_status" in body
+        assert "worker_heartbeat_age_seconds" in body
+        assert body["odds_format"] == "american"
         dashboard = client.get("/")
         assert dashboard.status_code == 200
-        assert "Best available opportunities" in dashboard.text
+        assert "WNBA In-Play Simulation" in dashboard.text
+        assert "Scenario Lab" in dashboard.text
         model_card = client.get("/api/v1/model-card")
         assert model_card.json()["policy"]["hard_min_conservative_roi"] == .02

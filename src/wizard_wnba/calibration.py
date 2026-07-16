@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .domain import ProbabilityEstimate
 from .odds_math import fair_decimal_with_push
@@ -10,6 +10,22 @@ from .odds_math import fair_decimal_with_push
 
 class CalibrationError(RuntimeError):
     pass
+
+
+class UnsupportedMarketError(CalibrationError):
+    """A market has no eligible production calibrator.
+
+    Raised instead of ever returning ``None`` for a missing calibrator, so a
+    caller can never invoke ``.validate()`` on a ``NoneType``. Callers that
+    price a stream of markets catch this at the individual-market boundary and
+    skip only that market, leaving supported markets unaffected.
+    """
+
+    def __init__(self, market_key: str) -> None:
+        self.market_key = market_key
+        super().__init__(
+            f"market '{market_key}' has no eligible production calibrator"
+        )
 
 
 @dataclass(frozen=True)
@@ -33,8 +49,37 @@ class BetaCalibrator:
 
 
 class CalibrationRegistry:
-    def __init__(self, calibrators: Mapping[str, BetaCalibrator]) -> None:
+    def __init__(
+        self,
+        calibrators: Mapping[str, BetaCalibrator],
+        *,
+        eligible_markets: Iterable[str] | None = None,
+    ) -> None:
         self.calibrators = dict(calibrators)
+        # Eligibility defaults to the set of markets that actually have a
+        # calibrator. An explicit set may be narrower (production policy) but
+        # never wider than what we can calibrate.
+        if eligible_markets is None:
+            self.eligible_markets = frozenset(self.calibrators)
+        else:
+            self.eligible_markets = frozenset(eligible_markets) & frozenset(
+                self.calibrators
+            )
+
+    def is_eligible(self, key: str) -> bool:
+        return key in self.eligible_markets
+
+    def calibrator_for(self, key: str) -> BetaCalibrator:
+        """Return a valid calibrator or raise ``UnsupportedMarketError``.
+
+        Never returns ``None`` — that is the whole point of the typed contract.
+        """
+        if key not in self.eligible_markets:
+            raise UnsupportedMarketError(key)
+        calibrator = self.calibrators.get(key)
+        if calibrator is None:  # pragma: no cover - eligibility guards this
+            raise UnsupportedMarketError(key)
+        return calibrator
 
     def apply(
         self,
@@ -43,10 +88,11 @@ class CalibrationRegistry:
         key: str,
         require: bool = True,
     ) -> ProbabilityEstimate:
-        calibrator = self.calibrators.get(key)
-        if calibrator is None:
+        try:
+            calibrator = self.calibrator_for(key)
+        except UnsupportedMarketError:
             if require:
-                raise CalibrationError(f"required calibrator missing for {key}")
+                raise
             return estimate
 
         non_push = 1 - estimate.p_push

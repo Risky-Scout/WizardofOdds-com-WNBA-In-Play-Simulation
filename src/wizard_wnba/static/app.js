@@ -346,14 +346,29 @@ function prepareScenario() {
     return;
   }
 
+  // Bind the form to this exact market_id so a submit can never silently use
+  // a different book's line.
+  byId("scenario-form").dataset.marketId = String(item.market_id);
+
+  const isMoneyline = String(item.market_key || "") === "h2h";
+
   const sideValues = new Set(["over", "under", "home", "away"]);
   byId("scenario-side").value = sideValues.has(item.side)
     ? item.side
-    : "over";
+    : isMoneyline
+      ? "home"
+      : "over";
 
-  byId("scenario-line").value =
-    item.line == null
-      ? item.market_key === "h2h" ? 0.5 : ""
+  // Live line/odds are populated read-only from the selected sportsbook, and
+  // the line field is hidden entirely for two-way moneyline (h2h) markets.
+  const lineField = byId("scenario-line-field");
+  if (lineField) {
+    lineField.classList.toggle("hidden", isMoneyline);
+  }
+  byId("scenario-line").value = isMoneyline
+    ? ""
+    : item.line == null
+      ? ""
       : item.line;
 
   byId("scenario-odds").value = item.american_odds ?? "";
@@ -374,42 +389,54 @@ function prepareScenario() {
 }
 
 function renderScenarioResult(result) {
-  byId("scenario-result").innerHTML = `
-    <div class="result-grid">
-      <div>
+  const cells = [
+    `<div>
         <small>Win probability</small>
         <strong>${percentage(result.win_probability)}</strong>
-      </div>
-      <div>
+      </div>`,
+    `<div>
         <small>Push probability</small>
         <strong>${percentage(result.push_probability)}</strong>
-      </div>
-      <div>
+      </div>`,
+    `<div>
         <small>Fair American odds</small>
         <strong>${
           result.fair_american_odds > 0
             ? `+${result.fair_american_odds}`
             : result.fair_american_odds ?? "—"
         }</strong>
-      </div>
-      <div>
+      </div>`,
+    `<div>
         <small>Expected ROI</small>
         <strong>${percentage(result.expected_roi)}</strong>
-      </div>
-      <div>
+      </div>`,
+    `<div>
         <small>Conservative ROI</small>
         <strong>${percentage(result.conservative_roi)}</strong>
-      </div>
-      <div>
+      </div>`,
+    `<div>
         <small>Simulations</small>
         <strong>${Number(result.simulation_count).toLocaleString()}</strong>
-      </div>
-      <div>
+      </div>`,
+  ];
+
+  // "Projected mean" is a point projection only for line-based markets. For a
+  // two-way moneyline the server returns null, so we omit the card entirely
+  // rather than show a meaningless Bernoulli mean.
+  if (result.projected_mean !== null && result.projected_mean !== undefined) {
+    cells.push(
+      `<div>
         <small>Projected mean</small>
         <strong>${Number(result.projected_mean).toFixed(2)}</strong>
-      </div>
-      <div>
-        <small>Model confidence</small>
+      </div>`,
+    );
+  }
+
+  // This card describes Monte Carlo precision (simulation stability), not the
+  // model's confidence in the bet — relabel it accordingly.
+  cells.push(
+    `<div>
+        <small>Monte Carlo precision</small>
         <strong>${
           Number(result.total_uncertainty) <= 0.04
             ? "High"
@@ -417,8 +444,18 @@ function renderScenarioResult(result) {
               ? "Medium"
               : "Low"
         }</strong>
-      </div>
+      </div>`,
+  );
+
+  const calibration = result.calibration_status
+    ? `<p class="calibration-badge">${escapeHtml(result.calibration_status)}</p>`
+    : "";
+
+  byId("scenario-result").innerHTML = `
+    <div class="result-grid">
+      ${cells.join("")}
     </div>
+    ${calibration}
     <p class="simulation-note">
       ${escapeHtml(result.note || "")}
     </p>`;
@@ -481,21 +518,61 @@ async function fetchSimulation(url, options = {}) {
 async function runScenario(event) {
   event.preventDefault();
 
-  const item = selectedRecommendation();
   const error = byId("scenario-error");
   error.textContent = "";
 
-  if (!item) {
+  const selectedId = String(byId("scenario-selection").value || "");
+  if (!selectedId) {
     error.textContent = "Select a live sportsbook line.";
     return;
   }
 
-  const line = Number(byId("scenario-line").value);
-  const odds = Number(byId("scenario-odds").value);
-
-  if (!Number.isFinite(line)) {
-    error.textContent = "Enter a valid custom line.";
+  // Always refresh the live feed immediately before submitting so a line that
+  // has expired is caught here. We never silently fall back to another book's
+  // line — the user must reselect a current one.
+  try {
+    const feed = await fetchJson(
+      `/api/v1/live-markets?refresh=${Date.now()}`,
+    );
+    state.liveMarkets = feed.markets || [];
+  } catch (refreshError) {
+    error.textContent =
+      `Could not refresh live lines: ${refreshError.message}`;
     return;
+  }
+
+  const item = (state.liveMarkets || []).find(
+    entry => String(entry.market_id) === selectedId,
+  );
+
+  populateScenarioSelections();
+
+  if (!item) {
+    error.textContent =
+      "This sportsbook line expired. Reselect a current line.";
+    byId("scenario-result").textContent =
+      "The selected sportsbook line is no longer available. "
+      + "Please reselect a current line.";
+    byId("scenario-submit").disabled = true;
+    return;
+  }
+
+  // Keep the current selection active and the form bound to this exact id.
+  byId("scenario-selection").value = selectedId;
+  byId("scenario-form").dataset.marketId = selectedId;
+
+  const isMoneyline = String(item.market_key || "") === "h2h";
+  const odds = Number(byId("scenario-odds").value || item.american_odds);
+
+  // Moneyline is a two-way market with no line; only line-based markets
+  // require a numeric line.
+  let line = null;
+  if (!isMoneyline) {
+    line = Number(byId("scenario-line").value);
+    if (!Number.isFinite(line)) {
+      error.textContent = "The selected line is unavailable.";
+      return;
+    }
   }
 
   if (
@@ -504,7 +581,7 @@ async function runScenario(event) {
     || (odds > -100 && odds < 100)
   ) {
     error.textContent =
-      "Enter American odds such as -110 or +105.";
+      "The selected sportsbook odds are invalid.";
     return;
   }
 
@@ -518,11 +595,13 @@ async function runScenario(event) {
   const payload = {
     market_id: item.market_id,
     side: byId("scenario-side").value,
-    line,
     american_odds: odds,
     remaining_minutes: remaining,
     simulations: 20000,
   };
+  if (!isMoneyline) {
+    payload.line = line;
+  }
 
   if (playerProps.has(String(item.market_key || ""))) {
     const current = byId("scenario-current-total").value.trim();

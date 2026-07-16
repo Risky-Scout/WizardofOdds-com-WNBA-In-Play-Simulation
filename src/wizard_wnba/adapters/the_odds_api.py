@@ -4,7 +4,24 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
 
-from .http import AsyncProviderClient, ProviderResponse
+from .http import AsyncProviderClient, ProviderHTTPError, ProviderResponse
+
+
+class EventOddsUnavailable(RuntimeError):
+    """An event-specific odds resource returned HTTP 404.
+
+    The Odds API returns 404 for a single event whose in-play odds market has
+    closed, settled, or been removed. This is an expected, per-event condition
+    — not a provider outage — so it must be surfaced as a nonfatal skip and
+    never escalated into a global collector failure.
+    """
+
+    def __init__(self, event_id: str, *, status_code: int = 404) -> None:
+        self.event_id = event_id
+        self.status_code = status_code
+        super().__init__(
+            f"event odds unavailable for event {event_id} (HTTP {status_code})"
+        )
 
 
 @dataclass(frozen=True)
@@ -98,11 +115,19 @@ class TheOddsApiClient:
         bookmaker_value = ",".join(bookmakers)
         if bookmaker_value:
             params["bookmakers"] = bookmaker_value
-        return await self.http.request_json(
-            "GET",
-            f"/v4/sports/{self.sport_key}/events/{event_id}/odds",
-            params=params,
-        )
+        try:
+            return await self.http.request_json(
+                "GET",
+                f"/v4/sports/{self.sport_key}/events/{event_id}/odds",
+                params=params,
+            )
+        except ProviderHTTPError as exc:
+            # A 404 here means this single event's odds resource is gone.
+            # Raise a typed nonfatal signal; every other status (401/403/429/
+            # 5xx/invalid payload) stays fatal and propagates unchanged.
+            if exc.status_code == 404:
+                raise EventOddsUnavailable(event_id) from exc
+            raise
 
     async def historical_featured_odds(
         self,

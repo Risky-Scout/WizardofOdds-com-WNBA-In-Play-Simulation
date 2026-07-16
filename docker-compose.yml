@@ -17,8 +17,6 @@ services:
       start_period: 15s
 
   worker:
-    healthcheck:
-      disable: true
     build: .
     image: wizardofodds/wnba-inplay:local
     command: wizard-wnba-worker
@@ -29,6 +27,14 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Real health based on heartbeat freshness: a stalled worker (live process
+    # but no completed cycle) fails the check even though it is still running.
+    healthcheck:
+      test: ["CMD", "wizard-wnba-worker", "--healthcheck"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
 
 volumes:
   wizard_wnba_data:
