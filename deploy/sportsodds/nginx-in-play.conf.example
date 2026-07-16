@@ -1,0 +1,41 @@
+# Reverse-proxy config for the WNBA In-Play Simulation on sportsodds.
+#
+# Unlike the static Pre-Game tools (index.html + latest.json served straight
+# from disk), In-Play is a LIVE FastAPI app (API container on 127.0.0.1:8080 +
+# a background worker). This block mounts it at the public tool path and STRIPS
+# the prefix so the app's relative asset/API URLs resolve correctly:
+#
+#   browser: .../In-Play/Simulation/static/app.js
+#   nginx strips prefix -> app: /static/app.js
+#   browser: .../In-Play/Simulation/api/v1/live-markets
+#   nginx strips prefix -> app: /api/v1/live-markets
+#
+# Add inside the existing `server { listen 443 ... server_name
+# sportsodds.wizardofodds.com; }` block, alongside the Pre-Game locations.
+
+# Canonicalize to a trailing slash so relative URLs resolve under the tool dir.
+location = /tools/odds-scanner/predictions/WNBA/In-Play/Simulation {
+    return 308 /tools/odds-scanner/predictions/WNBA/In-Play/Simulation/;
+}
+
+location /tools/odds-scanner/predictions/WNBA/In-Play/Simulation/ {
+    # The trailing slash on proxy_pass is what strips the location prefix.
+    proxy_pass http://127.0.0.1:8080/;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP         $remote_addr;
+
+    # WebSocket upgrade for /ws/live.
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+# Optional but recommended: set ROOT_PATH in /opt/wizard-wnba/.env so FastAPI's
+# OpenAPI/docs/redirect URLs are correct behind the stripped prefix. The page
+# itself works without it because all asset/API references are relative.
+#   ROOT_PATH=/tools/odds-scanner/predictions/WNBA/In-Play/Simulation
