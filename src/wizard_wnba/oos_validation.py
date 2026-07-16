@@ -303,6 +303,227 @@ def evaluate_oos_rows(
     )
 
 
+ELIGIBLE_MARKETS: tuple[str, ...] = (
+    "h2h",
+    "spreads",
+    "totals",
+    "player_points",
+    "player_rebounds",
+    "player_threes",
+)
+
+
+def prepare_oos_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    markets: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Canonical evaluation row set, shared by the pooled and per-market gates.
+
+    A row is included iff it is settled (binary outcome), priced on an eligible
+    production market, and flagged ``market_eligible``. Stale and unavailable
+    rows are deliberately KEPT — the stale/availability bias gates need both
+    populations to measure a difference. This is the single row-preparation
+    both ``evaluate_oos_rows`` (pooled) and ``evaluate_by_market`` consume, so
+    the two gates can never disagree because of a different input set.
+    """
+    allowed = set(markets if markets is not None else ELIGIBLE_MARKETS)
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("probability") is None or row.get("outcome") not in {0, 1}:
+            continue
+        if str(row.get("market_key")) not in allowed:
+            continue
+        if "market_eligible" in row and not row.get("market_eligible"):
+            continue
+        prepared.append(dict(row))
+    return prepared
+
+
+@dataclass(frozen=True)
+class PerMarketGate:
+    """Per-market promotion gate. STRICTER than the pooled gate: every market
+    must independently clear each threshold, so a weak market can no longer
+    free-ride on the pooled sample. The pooled gate requires 200 selected bets
+    once across all markets; here each market needs its own >=100, its own
+    positive bootstrap lower bound, and its own in-band calibration slope."""
+
+    minimum_selected_bets: int = 100
+    minimum_bootstrap_lower_roi: float = 0.0
+    calibration_slope_min: float = 0.85
+    calibration_slope_max: float = 1.15
+    maximum_stale_residual_bias: float = 0.01
+    maximum_availability_residual_bias: float = 0.01
+    bootstrap_samples: int = 5000
+    bootstrap_seed: int = 20260715
+
+
+@dataclass(frozen=True)
+class MarketGateResult:
+    market: str
+    sample_size: int
+    selected_bets: int
+    game_count: int
+    calibration_slope: float | None
+    calibration_intercept: float | None
+    brier: float | None
+    log_loss: float | None
+    consensus_brier: float | None
+    brier_gap_to_consensus: float | None
+    after_vig_roi: float | None
+    bootstrap_roi_lower_95: float | None
+    clv_mean: float | None
+    clv_sample: int
+    stale_residual_bias: float | None
+    availability_residual_bias: float | None
+    stale_bias_measurable: bool
+    availability_bias_measurable: bool
+    passed: bool
+    blockers: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _log_loss(rows: Sequence[Mapping[str, Any]]) -> float | None:
+    if not rows:
+        return None
+    total = 0.0
+    for row in rows:
+        p = _clip_probability(float(row["probability"]))
+        y = int(row["outcome"])
+        total += -(y * math.log(p) + (1 - y) * math.log(1 - p))
+    return total / len(rows)
+
+
+def _clv_for_selected(rows: Sequence[Mapping[str, Any]]) -> tuple[float | None, int]:
+    """Closing-line-value proxy for the selected bets.
+
+    True closing lines are not archived for these in-play checkpoints, so CLV
+    is measured against the no-vig multi-book consensus at the checkpoint (the
+    sharpest reference we have): CLV = consensus_prob(side) - implied_prob(price).
+    Positive CLV means the bet was struck at a better price than the consensus
+    fair value. Computable only where a >=2-book consensus exists.
+    """
+    values: list[float] = []
+    for row in rows:
+        if not bool(row.get("selected", False)):
+            continue
+        cons = row.get("consensus_probability")
+        dec = row.get("offered_decimal_odds")
+        if cons is None or dec is None:
+            continue
+        try:
+            implied = 1.0 / float(dec)
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        values.append(float(cons) - implied)
+    if not values:
+        return None, 0
+    return mean(values), len(values)
+
+
+def evaluate_market(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    market: str,
+    gate: PerMarketGate | None = None,
+) -> MarketGateResult:
+    """Run the per-market gate on one market's already-prepared rows."""
+    g = gate or PerMarketGate()
+    settled = [dict(r) for r in rows if r.get("probability") is not None
+               and r.get("outcome") in {0, 1}]
+
+    if not settled:
+        return MarketGateResult(
+            market=market, sample_size=0, selected_bets=0, game_count=0,
+            calibration_slope=None, calibration_intercept=None, brier=None,
+            log_loss=None, consensus_brier=None, brier_gap_to_consensus=None,
+            after_vig_roi=None, bootstrap_roi_lower_95=None, clv_mean=None,
+            clv_sample=0, stale_residual_bias=None, availability_residual_bias=None,
+            stale_bias_measurable=False, availability_bias_measurable=False,
+            passed=False, blockers=("no_settled_rows",),
+        )
+
+    probs = [_clip_probability(float(r["probability"])) for r in settled]
+    outs = [int(r["outcome"]) for r in settled]
+    wts = [max(float(r.get("weight", 1.0)), 0.0) for r in settled]
+    intercept, slope = _fit_logistic_calibration(probs, outs, wts)
+    brier = _weighted_mean([(p - o) ** 2 for p, o in zip(probs, outs, strict=True)], wts)
+
+    consensus_rows = [r for r in settled if r.get("consensus_probability") is not None]
+    consensus_brier = brier_gap = None
+    if len(consensus_rows) >= max(100, len(settled) // 2):
+        consensus_brier = mean(
+            (_clip_probability(float(r["consensus_probability"])) - int(r["outcome"])) ** 2
+            for r in consensus_rows
+        )
+        brier_gap = brier - consensus_brier
+
+    selected_rows = [r for r in settled if bool(r.get("selected", False))
+                     and r.get("offered_decimal_odds") is not None]
+    roi = mean(_bet_return(r) for r in selected_rows) if selected_rows else None
+    bootstrap_lower = _cluster_bootstrap_lower(
+        settled, samples=g.bootstrap_samples, seed=g.bootstrap_seed
+    )
+    clv_mean, clv_sample = _clv_for_selected(settled)
+    stale_bias, stale_meas = _residual_bias(settled, "stale")
+    avail_bias, avail_meas = _residual_bias(settled, "available")
+
+    blockers: list[str] = []
+    if len(selected_rows) < g.minimum_selected_bets:
+        blockers.append("selected_bets_below_minimum")
+    if bootstrap_lower is None or bootstrap_lower <= g.minimum_bootstrap_lower_roi:
+        blockers.append("bootstrap_lower_roi_not_positive")
+    if not (g.calibration_slope_min <= slope <= g.calibration_slope_max):
+        blockers.append("calibration_slope_outside_gate")
+    if stale_meas and stale_bias is not None and stale_bias > g.maximum_stale_residual_bias:
+        blockers.append("material_stale_line_bias")
+    if avail_meas and avail_bias is not None and avail_bias > g.maximum_availability_residual_bias:
+        blockers.append("material_availability_bias")
+
+    return MarketGateResult(
+        market=market,
+        sample_size=len(settled),
+        selected_bets=len(selected_rows),
+        game_count=len({str(r.get("game_id") or "") for r in settled}),
+        calibration_slope=slope,
+        calibration_intercept=intercept,
+        brier=brier,
+        log_loss=_log_loss(settled),
+        consensus_brier=consensus_brier,
+        brier_gap_to_consensus=brier_gap,
+        after_vig_roi=roi,
+        bootstrap_roi_lower_95=bootstrap_lower,
+        clv_mean=clv_mean,
+        clv_sample=clv_sample,
+        stale_residual_bias=stale_bias,
+        availability_residual_bias=avail_bias,
+        stale_bias_measurable=stale_meas,
+        availability_bias_measurable=avail_meas,
+        passed=not blockers,
+        blockers=tuple(blockers),
+    )
+
+
+def evaluate_by_market(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    gate: PerMarketGate | None = None,
+    markets: Sequence[str] | None = None,
+) -> dict[str, MarketGateResult]:
+    """Prepare rows once, then run the per-market gate on each eligible market."""
+    prepared = prepare_oos_rows(rows, markets=markets)
+    by_market: dict[str, list[dict[str, Any]]] = {}
+    for row in prepared:
+        by_market.setdefault(str(row.get("market_key")), []).append(row)
+    wanted = markets if markets is not None else ELIGIBLE_MARKETS
+    return {
+        m: evaluate_market(by_market.get(m, []), market=m, gate=gate)
+        for m in wanted
+    }
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:

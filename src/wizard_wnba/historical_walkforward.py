@@ -32,7 +32,12 @@ from .domain import (
     PlayerRateProfile,
 )
 from .simulation import MonteCarloEngine
-from .oos_validation import ValidationThresholds, evaluate_oos_rows
+from .oos_validation import (
+    ValidationThresholds,
+    evaluate_by_market,
+    evaluate_oos_rows,
+    prepare_oos_rows,
+)
 
 
 SUPPORTED_MARKETS = (
@@ -2071,7 +2076,17 @@ class HistoricalWalkForwardPipeline:
             minimum_selected_bets=self.config.minimum_selected_bets,
             bootstrap_samples=self.config.bootstrap_samples,
         )
-        metrics = evaluate_oos_rows(oos_rows, thresholds=thresholds)
+        # P1.5: the pipeline and the standalone gate MUST agree. Both now feed
+        # evaluate_oos_rows the SAME canonical row set (prepare_oos_rows), and
+        # both also record the per-market gate. There is exactly one gate
+        # implementation; the earlier "disagreement" was only a different input
+        # row set, which prepare_oos_rows removes.
+        prepared_oos = prepare_oos_rows(oos_rows)
+        metrics = evaluate_oos_rows(prepared_oos, thresholds=thresholds)
+        per_market = {
+            market: result.to_dict()
+            for market, result in evaluate_by_market(prepared_oos).items()
+        }
         report = {
             "generated_at": iso_z(datetime.now(UTC)),
             "seasons": list(self.config.seasons),
@@ -2092,6 +2107,7 @@ class HistoricalWalkForwardPipeline:
                 for key, value in production_calibrators.items()
             },
             "oos_metrics": metrics.to_dict(),
+            "per_market_gate": per_market,
         }
         report_path = self.config.data_dir / "calibration" / "walkforward_report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2148,6 +2164,7 @@ class HistoricalWalkForwardPipeline:
                 "availability_residual_bias": metrics.availability_residual_bias,
                 "promotion_passed": metrics.passed,
                 "blockers": list(metrics.blockers),
+                "per_market_gate": per_market,
             },
             "profiles": profile_bundle_rows(
                 histories,
