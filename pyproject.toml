@@ -23,7 +23,7 @@ dev = [
   "ruff>=0.8,<1",
 ]
 sportsdataverse = [
-  "sportsdataverse==0.0.70",
+  "sportsdataverse==0.1.4",
 ]
 
 [project.scripts]
